@@ -2,6 +2,7 @@ package com.steamarbitrage.test;
 
 import com.steamarbitrage.cli.ArgParser;
 import com.steamarbitrage.cli.ConsoleReport;
+import com.steamarbitrage.core.AdviceCalculator;
 import com.steamarbitrage.core.BalanceCalculator;
 import com.steamarbitrage.core.CalcRequest;
 import com.steamarbitrage.core.CalcResult;
@@ -9,7 +10,10 @@ import com.steamarbitrage.core.FeeCalculator;
 import com.steamarbitrage.core.FeeMode;
 import com.steamarbitrage.core.GameProfile;
 import com.steamarbitrage.core.Money;
+import com.steamarbitrage.core.PlanKind;
 import com.steamarbitrage.core.PriceType;
+import com.steamarbitrage.core.PurchaseAdvice;
+import com.steamarbitrage.core.PurchasePlan;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -39,6 +43,7 @@ public final class SelfTest {
         testCalculation();
         testSellerPriceType();
         testSimpleMode();
+        testPurchaseAdvice();
         testEdgeCases();
         testCeilDiv();
         testArgParser();
@@ -243,6 +248,100 @@ public final class SelfTest {
         checkTrue("精确模式到手更高", exact.sellerReceivesCents() > simple.sellerReceivesCents());
     }
 
+    private static void testPurchaseAdvice() {
+        // 基准算例：70 / 100 / 1000
+        CalcResult result = calculate("70", "100", "1000",
+                PriceType.BUYER_PAID, GameProfile.CS2, FeeMode.EXACT);
+        PurchaseAdvice advice = AdviceCalculator.advise(result);
+
+        checkTrue("建议：两方案不相同", !advice.identical());
+        check("建议：推荐方式 B", PlanKind.FULL_FLIP, advice.recommended());
+
+        // 方式 A = 少倒 11 件 + 原价补差 43.33
+        PurchasePlan topUp = advice.topUpPlan();
+        check("方式A：件数", 11L, topUp.itemCount());
+        check("方式A：饰品支出", 77000L, topUp.itemCostCents());
+        check("方式A：充值补差", 4333L, topUp.topUpCents());
+        check("方式A：现金支出", 81333L, topUp.totalSpendCents());
+        check("方式A：最终余额恰为目标", 100000L, topUp.balanceCents());
+        check("方式A：偏差为 0", 0L, topUp.deviation().cents());
+        checkDecimal("方式A：单位余额成本", "81.33", topUp.costPercent());
+
+        // 方式 B = 多倒 12 件，全额折扣余额
+        PurchasePlan fullFlip = advice.fullFlipPlan();
+        check("方式B：件数", 12L, fullFlip.itemCount());
+        check("方式B：饰品支出", 84000L, fullFlip.itemCostCents());
+        check("方式B：无充值补差", 0L, fullFlip.topUpCents());
+        check("方式B：现金支出", 84000L, fullFlip.totalSpendCents());
+        check("方式B：最终余额", 104364L, fullFlip.balanceCents());
+        checkDecimal("方式B：单位余额成本", "80.49", fullFlip.costPercent());
+
+        // 边际关系：多花 26.67 换多拿 43.64，边际折合 61.11%
+        check("边际：现金增量", 2667L, advice.spendDeltaCents());
+        check("边际：余额增量", 4364L, advice.balanceDeltaCents());
+        checkDecimal("边际：折合", "61.11", advice.marginalPercent());
+        checkTrue("边际：此例方式B需多花钱", !advice.fullFlipStrictlyBetter());
+
+        // 核心不变量：只要单件划算，方式 B 的单位余额成本永远不差于方式 A
+        checkTrue("不变量：方式B单位成本不高于方式A",
+                fullFlip.costRatio().compareTo(topUp.costRatio()) <= 0);
+
+        // ── 目标恰为单件到手的整数倍：两方案完全相同 ──
+        PurchaseAdvice same = AdviceCalculator.advise(calculate("70", "100", "434.85",
+                PriceType.BUYER_PAID, GameProfile.CS2, FeeMode.EXACT));
+        checkTrue("整除：标记为相同", same.identical());
+        check("整除：方式A件数", 5L, same.topUpPlan().itemCount());
+        check("整除：方式B件数", 5L, same.fullFlipPlan().itemCount());
+        check("整除：无需充值", 0L, same.topUpPlan().topUpCents());
+        check("整除：现金增量 0", 0L, same.spendDeltaCents());
+        check("整除：余额增量 0", 0L, same.balanceDeltaCents());
+
+        // ── 差额大于单件成本：方式 B 反而又省钱又多拿余额 ──
+        PurchaseAdvice better = AdviceCalculator.advise(calculate("70", "100", "1031.67",
+                PriceType.BUYER_PAID, GameProfile.CS2, FeeMode.EXACT));
+        checkTrue("差额大：方式B无条件更优", better.fullFlipStrictlyBetter());
+        check("差额大：方式B少花 5 元", -500L, better.spendDeltaCents());
+        check("差额大：方式B多拿 11.97", 1197L, better.balanceDeltaCents());
+        check("差额大：仍推荐方式 B", PlanKind.FULL_FLIP, better.recommended());
+
+        // ── 单件本身不划算：改推荐方式 A ──
+        PurchaseAdvice unprofitable = AdviceCalculator.advise(calculate("90", "100", "1000",
+                PriceType.BUYER_PAID, GameProfile.CS2, FeeMode.EXACT));
+        check("不划算：推荐方式 A", PlanKind.TOP_UP, unprofitable.recommended());
+        check("不划算：方式A件数", 11L, unprofitable.topUpPlan().itemCount());
+        checkDecimal("不划算：方式A成本", "103.33", unprofitable.topUpPlan().costPercent());
+        // 即便不划算，少倒的方式 A 也必须比多倒的方式 B 亏得少
+        checkTrue("不划算：方式A单位成本更低",
+                unprofitable.topUpPlan().costRatio()
+                        .compareTo(unprofitable.fullFlipPlan().costRatio()) < 0);
+
+        // ── 目标低于单件到手 且 不划算：方式 A 退化为纯充值 ──
+        PurchaseAdvice pureTopUp = AdviceCalculator.advise(calculate("90", "100", "50",
+                PriceType.BUYER_PAID, GameProfile.CS2, FeeMode.EXACT));
+        checkTrue("纯充值：方式A不买饰品", pureTopUp.topUpPlan().isPureTopUp());
+        check("纯充值：件数为 0", 0L, pureTopUp.topUpPlan().itemCount());
+        check("纯充值：补差等于目标", 5000L, pureTopUp.topUpPlan().topUpCents());
+        checkDecimal("纯充值：成本 100%", "100.00", pureTopUp.topUpPlan().costPercent());
+        check("纯充值：推荐方式 A", PlanKind.TOP_UP, pureTopUp.recommended());
+
+        // ── 目标低于单件到手 但 单件划算：仍推荐方式 B ──
+        PurchaseAdvice smallTarget = AdviceCalculator.advise(calculate("70", "100", "50",
+                PriceType.BUYER_PAID, GameProfile.CS2, FeeMode.EXACT));
+        check("小额：推荐方式 B", PlanKind.FULL_FLIP, smallTarget.recommended());
+        checkTrue("小额：方式A是纯充值", smallTarget.topUpPlan().isPureTopUp());
+        checkDecimal("小额：边际折合", "54.10", smallTarget.marginalPercent());
+
+        // ── 补差过小（不足 1 元），现实中可能无法充值 ──
+        PurchaseAdvice tinyRemainder = AdviceCalculator.advise(calculate("70", "100", "870.00",
+                PriceType.BUYER_PAID, GameProfile.CS2, FeeMode.EXACT));
+        check("补差过小：补差额为 0.30", 30L, tinyRemainder.topUpPlan().topUpCents());
+        checkTrue("补差过小：被标记", tinyRemainder.topUpTooSmall());
+        checkTrue("补差过小：未误判为相同", !tinyRemainder.identical());
+
+        checkThrows("建议：null 结果", IllegalArgumentException.class,
+                () -> AdviceCalculator.advise(null));
+    }
+
     private static void testEdgeCases() {
         // 售价低于 0.03 时卖家实得为 0，应明确报错而不是除零
         checkThrows("售价 0.02 无法倒余额", IllegalStateException.class,
@@ -335,6 +434,8 @@ public final class SelfTest {
                 ConsoleReport.formatDiscount(new BigDecimal("0.804875")));
         check("折扣格式化（不划算）", "115.00% （11.50 折，不划算）",
                 ConsoleReport.formatDiscount(new BigDecimal("1.15")));
+        check("折扣格式化（无折扣）", "100.00% （10.00 折，无折扣）",
+                ConsoleReport.formatDiscount(BigDecimal.ONE));
         check("性价比格式化", "1.2424（每花 ¥1 到手 ¥1.2424 余额）",
                 ConsoleReport.formatValueRatio(new BigDecimal("1.2424285714")));
 
@@ -351,6 +452,14 @@ public final class SelfTest {
         checkTrue("报告包含折合折扣", report.contains("80.49%"));
         checkTrue("报告包含目标余额", report.contains("¥1,000.00"));
         checkTrue("报告包含超出目标", report.contains("¥43.64"));
+        checkTrue("报告包含购买建议章节", report.contains("[购买建议]"));
+        checkTrue("报告包含方式 A", report.contains("方式 A · 少倒 + 补差价"));
+        checkTrue("报告包含方式 B", report.contains("方式 B · 多倒 + 全额余额"));
+        checkTrue("报告给出方式 A 的补差额", report.contains("¥43.33"));
+        checkTrue("报告给出方式 A 的现金支出", report.contains("¥813.33"));
+        checkTrue("报告标注推荐方式 B", report.contains("★ 推荐：方式 B"));
+        checkTrue("报告给出边际折合", report.contains("61.11%"));
+        checkTrue("报告提示可选方式 A", report.contains("可选方式 A"));
         checkTrue("可达档位不产生警告", ConsoleReport.warnings(result).isEmpty());
 
         // 不可达档位必须提醒

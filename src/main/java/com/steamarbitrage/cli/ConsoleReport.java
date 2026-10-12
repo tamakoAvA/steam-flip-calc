@@ -1,12 +1,16 @@
 package com.steamarbitrage.cli;
 
+import com.steamarbitrage.core.AdviceCalculator;
 import com.steamarbitrage.core.CalcRequest;
 import com.steamarbitrage.core.CalcResult;
 import com.steamarbitrage.core.FeeCalculator;
 import com.steamarbitrage.core.FeeMode;
 import com.steamarbitrage.core.GameProfile;
 import com.steamarbitrage.core.Money;
+import com.steamarbitrage.core.PlanKind;
 import com.steamarbitrage.core.PriceType;
+import com.steamarbitrage.core.PurchaseAdvice;
+import com.steamarbitrage.core.PurchasePlan;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -64,7 +68,9 @@ public final class ConsoleReport {
         row(sb, "实际到手余额", result.actualBalance().toGroupedString());
         row(sb, "实际折合折扣", formatDiscount(result.discountRatio()));
         row(sb, "超出目标", formatSurplus(result));
-        sb.append(RULE).append('\n');
+        sb.append('\n');
+
+        appendAdvice(sb, result);
 
         return sb.toString();
     }
@@ -128,7 +134,8 @@ public final class ConsoleReport {
     public static String formatDiscount(BigDecimal ratio) {
         BigDecimal percent = ratio.movePointRight(2).setScale(2, RoundingMode.HALF_UP);
         BigDecimal zhe = ratio.movePointRight(1).setScale(2, RoundingMode.HALF_UP);
-        String verdict = ratio.compareTo(BigDecimal.ONE) < 0 ? "划算" : "不划算";
+        int compared = ratio.compareTo(BigDecimal.ONE);
+        String verdict = compared < 0 ? "划算" : (compared == 0 ? "无折扣" : "不划算");
         return percent.toPlainString() + "% （" + zhe.toPlainString() + " 折，" + verdict + "）";
     }
 
@@ -136,6 +143,152 @@ public final class ConsoleReport {
     public static String formatValueRatio(BigDecimal ratio) {
         BigDecimal shown = ratio.setScale(4, RoundingMode.HALF_UP);
         return shown.toPlainString() + "（每花 ¥1 到手 ¥" + shown.toPlainString() + " 余额）";
+    }
+
+    // ── 购买建议 ────────────────────────────────────────────────────────────
+
+    private static void appendAdvice(StringBuilder sb, CalcResult result) {
+        PurchaseAdvice advice = AdviceCalculator.advise(result);
+
+        sb.append(THIN).append('\n');
+        sb.append(" [购买建议]\n");
+        sb.append(THIN).append('\n');
+
+        if (advice.identical()) {
+            sb.append(" 目标余额恰好是单件到手余额的整数倍，两种购买方式完全相同：\n");
+            sb.append(" 买 ").append(advice.fullFlipPlan().itemCount())
+              .append(" 件即可，既不用充值补差，也不会多余额。\n");
+            sb.append(RULE).append('\n');
+            return;
+        }
+
+        appendPlan(sb, advice.topUpPlan());
+        sb.append('\n');
+        appendPlan(sb, advice.fullFlipPlan());
+        sb.append('\n');
+        appendRecommendation(sb, result, advice);
+
+        sb.append(RULE).append('\n');
+    }
+
+    private static void appendPlan(StringBuilder sb, PurchasePlan plan) {
+        sb.append(' ').append(plan.kind().label()).append('\n');
+
+        String itemText = plan.itemCount() + " 件";
+        if (plan.isPureTopUp()) {
+            itemText += "（全部走充值，不买饰品）";
+        }
+
+        subRow(sb, "饰品件数", itemText);
+        subRow(sb, "饰品支出", plan.itemCost().toGroupedString());
+        subRow(sb, "充值补差", plan.topUp().toGroupedString());
+        subRow(sb, "现金支出", plan.totalSpend().toGroupedString());
+        subRow(sb, "最终余额", plan.balance().toGroupedString() + describeDeviation(plan));
+        subRow(sb, "单位余额成本", formatDiscount(plan.costRatio()));
+    }
+
+    private static String describeDeviation(PurchasePlan plan) {
+        Money deviation = plan.deviation();
+        if (deviation.isZero()) {
+            return "（恰好达标）";
+        }
+        if (deviation.isNegative()) {
+            return "（尚差 " + deviation.times(-1).toGroupedString() + "）";
+        }
+        return "（超出 " + deviation.toGroupedString() + "）";
+    }
+
+    private static void appendRecommendation(StringBuilder sb, CalcResult result, PurchaseAdvice advice) {
+        PurchasePlan recommended = advice.recommendedPlan();
+        sb.append(" ★ 推荐：").append(recommended.kind().label()).append('\n');
+
+        if (advice.recommended() == PlanKind.TOP_UP) {
+            appendTopUpRecommendation(sb, result, advice);
+            return;
+        }
+
+        // 推荐方式 B
+        if (advice.topUpPlan().isPureTopUp()) {
+            // 目标余额还不到一件饰品的到手余额：方式 A 是纯充值，一点折扣都没有
+            sb.append("   目标余额 ")
+              .append(result.targetBalance().toGroupedString())
+              .append(" 还买不到一件饰品，方式 A 只能全额按面值充值。\n");
+            sb.append("   方式 B 花 ")
+              .append(recommended.totalSpend().toGroupedString())
+              .append(" 换到 ")
+              .append(recommended.balance().toGroupedString())
+              .append(" 余额，折合 ")
+              .append(recommended.costPercent().toPlainString())
+              .append("%，比原价充值便宜 ")
+              .append(Money.ofCents(recommended.balanceCents() - recommended.totalSpendCents()).toGroupedString())
+              .append("。\n");
+            return;
+        }
+
+        if (advice.fullFlipStrictlyBetter()) {
+            sb.append("   方式 B 不但不多花钱");
+            if (advice.spendDeltaCents() < 0) {
+                sb.append("，反而少花 ")
+                  .append(Money.ofCents(-advice.spendDeltaCents()).toGroupedString());
+            }
+            sb.append("，还多拿 ")
+              .append(Money.ofCents(advice.balanceDeltaCents()).toGroupedString())
+              .append(" 余额。\n");
+            sb.append("   与其按面值充值补差，不如把这笔钱换成折扣余额，没有任何理由选方式 A。\n");
+        } else {
+            sb.append("   比方式 A 多花 ")
+              .append(Money.ofCents(advice.spendDeltaCents()).toGroupedString())
+              .append("，多拿 ")
+              .append(Money.ofCents(advice.balanceDeltaCents()).toGroupedString())
+              .append(" 余额，\n");
+            sb.append("   这部分边际折合仅 ")
+              .append(advice.marginalPercent().toPlainString())
+              .append("%，远优于按面值 1:1 充值（100%）。\n");
+        }
+
+        sb.append("   方式 B 的全部余额都享受 ")
+          .append(recommended.costPercent().toPlainString())
+          .append("% 折扣，不存在原价充值部分。\n");
+
+        if (advice.spendDeltaCents() > 0) {
+            sb.append("   若你只需要恰好 ")
+              .append(result.targetBalance().toGroupedString())
+              .append(" 余额、希望现金支出最少，可选方式 A（少花 ")
+              .append(Money.ofCents(advice.spendDeltaCents()).toGroupedString())
+              .append("）。\n");
+        }
+
+        if (advice.topUpTooSmall()) {
+            sb.append("   另外方式 A 的补差只有 ")
+              .append(advice.topUpPlan().topUp().toGroupedString())
+              .append("，充值渠道通常有最小金额限制，实操上直接用方式 B 更省事。\n");
+        }
+    }
+
+    private static void appendTopUpRecommendation(StringBuilder sb, CalcResult result, PurchaseAdvice advice) {
+        if (advice.topUpPlan().isPureTopUp()) {
+            sb.append("   目标余额 ")
+              .append(result.targetBalance().toGroupedString())
+              .append(" 还不到一件饰品的到手余额，而单件饰品本身的折合折扣为 ")
+              .append(formatDiscount(result.unitDiscountRatio()))
+              .append("，\n");
+            sb.append("   倒它反而亏。建议直接按面值充值，不要通过倒余额获取。\n");
+            return;
+        }
+
+        sb.append("   单件饰品本身的折合折扣为 ")
+          .append(formatDiscount(result.unitDiscountRatio()))
+          .append("，也就是每倒一件都不划算，\n");
+        sb.append("   多倒只会多亏，因此建议只倒 ")
+          .append(advice.topUpPlan().itemCount())
+          .append(" 件，缺口 ")
+          .append(advice.topUpPlan().topUp().toGroupedString())
+          .append(" 直接按面值充值。\n");
+        sb.append("   充值不产生折扣，但也不会亏钱。\n");
+    }
+
+    private static void subRow(StringBuilder sb, String label, String value) {
+        sb.append("   ").append(padRight(label, LABEL_WIDTH)).append(" : ").append(value).append('\n');
     }
 
     private static String formatSurplus(CalcResult result) {

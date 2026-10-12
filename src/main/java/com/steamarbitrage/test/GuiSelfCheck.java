@@ -75,6 +75,10 @@ public final class GuiSelfCheck {
                     Money.parse("70"), Money.parse("100"), PriceType.BUYER_PAID,
                     GameProfile.CS2, FeeMode.EXACT, Money.parse("1000")));
             check("GUI 报告与命令行逐字一致", ConsoleReport.render(expected), reportText(app));
+            checkTrue("GUI 显示购买建议章节", reportText(app).contains("[购买建议]"));
+            checkTrue("GUI 显示两种购买方式", reportText(app).contains("方式 A · 少倒 + 补差价")
+                    && reportText(app).contains("方式 B · 多倒 + 全额余额"));
+            checkTrue("GUI 显示推荐结论", reportText(app).contains("★ 推荐：方式 B"));
 
             // ── 用例 B：下拉框切到 TF2 与「卖家到手价」──
             setCombo(app, "gameBox", 1);

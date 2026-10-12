@@ -97,7 +97,7 @@ public final class SwingApp {
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         frame.setContentPane(buildRoot());
         frame.pack();
-        frame.setMinimumSize(new Dimension(780, 620));
+        frame.setMinimumSize(new Dimension(840, 700));
         frame.setLocationRelativeTo(null);
         frame.setVisible(true);
         compute();
@@ -116,7 +116,7 @@ public final class SwingApp {
         reportArea.setMargin(new Insets(10, 12, 10, 12));
         reportArea.setBackground(new Color(0xFC, 0xFC, 0xFC));
         JScrollPane scroll = new JScrollPane(reportArea);
-        scroll.setPreferredSize(new Dimension(760, 420));
+        scroll.setPreferredSize(new Dimension(800, 560));
         root.add(scroll, BorderLayout.CENTER);
 
         statusLabel.setBorder(BorderFactory.createEmptyBorder(6, 12, 8, 12));
