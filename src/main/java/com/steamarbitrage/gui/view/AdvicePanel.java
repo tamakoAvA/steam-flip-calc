@@ -24,15 +24,14 @@ import java.awt.GridBagLayout;
 import java.awt.GridLayout;
 import java.awt.Insets;
 import java.math.BigDecimal;
-import java.util.List;
 
 /**
- * 购买建议区：两种买法并排对比 + 推荐结论 + 理由 + 注意事项。
+ * 购买建议卡：两种买法并排对比 + 推荐结论 + 理由 + 注意事项。
  *
- * <p>推荐的那张卡换成浅绿底并加绿色描边，配一个「★ 推荐」徽标，
- * 扫一眼就能看出该选哪个。理由文案由 {@link AdviceNarrator} 提供，与命令行完全一致。
+ * <p>推荐的那张换浅绿底并加绿色描边，配「★ 推荐」徽标，扫一眼就知道选哪个。
+ * 理由文案由 {@link AdviceNarrator} 提供，与命令行逐字同源。
  */
-public final class AdvicePanel extends CardPanel {
+public final class AdvicePanel extends SectionCard {
 
     private final PlanCard topUpCard = new PlanCard();
     private final PlanCard fullFlipCard = new PlanCard();
@@ -41,8 +40,9 @@ public final class AdvicePanel extends CardPanel {
     private final JPanel bannerHolder = UiFactory.transparentPanel(new GridLayout(0, 1, 0, Theme.GAP_SM));
 
     public AdvicePanel() {
-        super(new GridBagLayout());
-        setBorder(new EmptyBorder(Theme.GAP_LG, Theme.GAP_LG, Theme.GAP_LG, Theme.GAP_LG));
+        super("购买建议");
+
+        JPanel body = UiFactory.transparentPanel(new GridBagLayout());
 
         GridBagConstraints c = new GridBagConstraints();
         c.gridx = 0;
@@ -50,39 +50,36 @@ public final class AdvicePanel extends CardPanel {
         c.fill = GridBagConstraints.HORIZONTAL;
         c.anchor = GridBagConstraints.NORTH;
 
+        CardPanel banner = UiFactory.darkBanner();
+        banner.add(recommendLabel, BorderLayout.WEST);
         c.gridy = 0;
         c.gridwidth = 2;
         c.insets = new Insets(0, 0, Theme.GAP_MD, 0);
-        add(UiFactory.heading("购买建议"), c);
+        body.add(banner, c);
 
-        CardPanel banner = UiFactory.darkBanner();
-        banner.add(recommendLabel, BorderLayout.WEST);
         c.gridy = 1;
-        c.insets = new Insets(0, 0, Theme.GAP_MD, 0);
-        add(banner, c);
-
-        c.gridy = 2;
         c.gridwidth = 1;
-        c.insets = new Insets(0, 0, Theme.GAP_MD, 0);
         c.fill = GridBagConstraints.BOTH;
-        add(topUpCard, c);
+        body.add(topUpCard, c);
 
         c.gridx = 1;
         c.insets = new Insets(0, Theme.GAP_MD, Theme.GAP_MD, 0);
-        add(fullFlipCard, c);
+        body.add(fullFlipCard, c);
 
-        c.gridy = 3;
+        c.gridy = 2;
         c.gridx = 0;
         c.gridwidth = 2;
         c.fill = GridBagConstraints.HORIZONTAL;
         c.insets = new Insets(0, 0, Theme.GAP_MD, 0);
-        add(buildReasonArea(), c);
+        body.add(buildReasonArea(), c);
 
-        c.gridy = 4;
+        c.gridy = 3;
         c.insets = new Insets(0, 0, 0, 0);
         c.weighty = 1;
         c.anchor = GridBagConstraints.NORTH;
-        add(bannerHolder, c);
+        body.add(bannerHolder, c);
+
+        setBody(body);
     }
 
     private JComponent buildReasonArea() {
@@ -99,11 +96,17 @@ public final class AdvicePanel extends CardPanel {
     public void update(CalcResult result) {
         PurchaseAdvice advice = AdviceCalculator.advise(result);
         boolean recommendTopUp = advice.recommended() == PlanKind.TOP_UP;
+        boolean identical = advice.identical();
 
-        topUpCard.update(advice.topUpPlan(), recommendTopUp);
-        fullFlipCard.update(advice.fullFlipPlan(), !recommendTopUp);
+        // 两种方式完全一样时，并排对比没有意义，只留结论文字
+        topUpCard.setVisible(!identical);
+        fullFlipCard.setVisible(!identical);
+        if (!identical) {
+            topUpCard.update(advice.topUpPlan(), recommendTopUp);
+            fullFlipCard.update(advice.fullFlipPlan(), !recommendTopUp);
+        }
 
-        recommendLabel.setText(advice.identical()
+        recommendLabel.setText(identical
                 ? "两种购买方式完全相同"
                 : "★ 推荐：" + advice.recommendedPlan().kind().label());
 
@@ -121,8 +124,9 @@ public final class AdvicePanel extends CardPanel {
         bannerHolder.repaint();
     }
 
-    /** 输入不完整时清空建议内容。 */
     public void clear() {
+        topUpCard.setVisible(true);
+        fullFlipCard.setVisible(true);
         topUpCard.clear();
         fullFlipCard.clear();
         recommendLabel.setText("等待有效输入");

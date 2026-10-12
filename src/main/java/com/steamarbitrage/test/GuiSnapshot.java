@@ -1,27 +1,36 @@
 package com.steamarbitrage.test;
 
 import com.steamarbitrage.gui.SwingApp;
+import com.steamarbitrage.gui.theme.Theme;
+import com.steamarbitrage.gui.view.SectionCard;
+import com.steamarbitrage.gui.view.SideDrawer;
 
 import javax.imageio.ImageIO;
 import javax.swing.JFrame;
 import javax.swing.JScrollPane;
 import javax.swing.SwingUtilities;
+import java.awt.Dimension;
 import java.awt.GraphicsEnvironment;
+import java.awt.Point;
 import java.awt.Rectangle;
 import java.awt.Robot;
+import java.awt.Toolkit;
 import java.awt.Window;
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 
 /**
  * 把图形界面截成 PNG，用于人工核对排版、留白与配色。
  *
- * <p>这是开发期的自查工具，不参与自测断言。用法：
+ * <p>开发期自查工具，不参与自测断言。用法：
  * <pre>
- * java -cp "out\classes;lib\*" com.steamarbitrage.test.GuiSnapshot &lt;输出路径&gt; &lt;宽&gt; &lt;高&gt;
+ * java -cp "out\classes;lib\*" com.steamarbitrage.test.GuiSnapshot &lt;输出路径&gt; &lt;宽&gt; &lt;高&gt; [状态]
  * </pre>
- *
- * <p>窗口会被临时置顶几秒以便稳定截屏，完成后立即关闭。
+ * 状态可选 {@code default}（默认）、{@code drawer}（展开侧边抽屉）、
+ * {@code pinned}（把购买建议固定在顶部）。
  */
 public final class GuiSnapshot {
 
@@ -37,9 +46,27 @@ public final class GuiSnapshot {
         String outPath = args.length > 0 ? args[0] : "out/screenshots/gui.png";
         int width = args.length > 1 ? Integer.parseInt(args[1]) : 1360;
         int height = args.length > 2 ? Integer.parseInt(args[2]) : 900;
+        String state = args.length > 3 ? args[3] : "default";
 
-        SwingApp.launch();
-        Thread.sleep(3500);
+        Theme.install();
+
+        Object[] appHolder = new Object[1];
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                Constructor<SwingApp> constructor = SwingApp.class.getDeclaredConstructor();
+                constructor.setAccessible(true);
+                Object app = constructor.newInstance();
+                appHolder[0] = app;
+
+                Method show = SwingApp.class.getDeclaredMethod("show");
+                show.setAccessible(true);
+                show.invoke(app);
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        });
+
+        Thread.sleep(2200);
 
         JFrame target = findMainWindow();
         if (target == null) {
@@ -53,24 +80,24 @@ public final class GuiSnapshot {
             target.setLocation(30, 30);
             target.toFront();
         });
-        Thread.sleep(1500);
+        Thread.sleep(900);
 
-        // 把鼠标移出窗口，避免悬停高亮污染截图
+        applyState(appHolder[0], state);
+        Thread.sleep(900);
+
         Robot robot = new Robot();
-        java.awt.Dimension screen = java.awt.Toolkit.getDefaultToolkit().getScreenSize();
+        Dimension screen = Toolkit.getDefaultToolkit().getScreenSize();
         robot.mouseMove(screen.width - 4, screen.height - 4);
-        Thread.sleep(600);
+        Thread.sleep(500);
 
-        // 视口回到顶部：窗口尺寸是在显示之后设置的，Swing 可能为保持焦点可见而自动滚动
         JScrollPane scroll = findScrollPane(target.getContentPane());
         if (scroll != null) {
-            final JScrollPane target1 = scroll;
             SwingUtilities.invokeAndWait(
-                    () -> target1.getViewport().setViewPosition(new java.awt.Point(0, 0)));
+                    () -> scroll.getViewport().setViewPosition(new Point(0, 0)));
             Thread.sleep(500);
             System.out.printf("内容首选尺寸 %s  视口 %s%n",
-                    target1.getViewport().getView().getPreferredSize(),
-                    target1.getViewport().getExtentSize());
+                    scroll.getViewport().getView().getPreferredSize(),
+                    scroll.getViewport().getExtentSize());
         }
 
         Rectangle bounds = target.getBounds();
@@ -81,12 +108,30 @@ public final class GuiSnapshot {
             file.getParentFile().mkdirs();
         }
         ImageIO.write(image, "png", file);
-        System.out.printf("已保存 %s  图像 %d×%d  窗口 %d×%d%n",
-                file.getAbsolutePath(), image.getWidth(), image.getHeight(),
-                bounds.width, bounds.height);
+        System.out.printf("已保存 %s  图像 %d×%d  状态 %s%n",
+                file.getAbsolutePath(), image.getWidth(), image.getHeight(), state);
 
         SwingUtilities.invokeAndWait(target::dispose);
         System.exit(0);
+    }
+
+    private static void applyState(Object app, String state) throws Exception {
+        if ("drawer".equals(state)) {
+            SideDrawer drawer = (SideDrawer) field(app, "sideDrawer");
+            SwingUtilities.invokeAndWait(() -> {
+                drawer.setExpanded(true);
+                drawer.finishAnimation();
+            });
+        } else if ("pinned".equals(state)) {
+            SectionCard advice = (SectionCard) field(app, "advicePanel");
+            SwingUtilities.invokeAndWait(advice.header()::togglePinForTest);
+        }
+    }
+
+    private static Object field(Object target, String name) throws Exception {
+        Field field = target.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        return field.get(target);
     }
 
     private static JFrame findMainWindow() {
@@ -100,8 +145,9 @@ public final class GuiSnapshot {
         return null;
     }
 
+    /** 只认可见的滚动面板：置顶区隐藏时不应被选中。 */
     private static JScrollPane findScrollPane(java.awt.Component component) {
-        if (component instanceof JScrollPane scrollPane) {
+        if (component instanceof JScrollPane scrollPane && scrollPane.isVisible()) {
             return scrollPane;
         }
         if (component instanceof java.awt.Container container) {

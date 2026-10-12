@@ -8,15 +8,18 @@ import com.steamarbitrage.gui.theme.CardPanel;
 import com.steamarbitrage.gui.theme.ScrollablePanel;
 import com.steamarbitrage.gui.theme.Theme;
 import com.steamarbitrage.gui.theme.UiFactory;
+import com.steamarbitrage.gui.theme.VerticalLayout;
 import com.steamarbitrage.gui.view.AdvicePanel;
-import com.steamarbitrage.gui.view.DetailPanel;
 import com.steamarbitrage.gui.view.InputPanel;
 import com.steamarbitrage.gui.view.MetricsPanel;
+import com.steamarbitrage.gui.view.SectionCard;
+import com.steamarbitrage.gui.view.SideDrawer;
+import com.steamarbitrage.gui.view.SingleItemPanel;
+import com.steamarbitrage.gui.view.TargetPanel;
 
 import javax.swing.AbstractAction;
 import javax.swing.ActionMap;
 import javax.swing.BorderFactory;
-import javax.swing.Box;
 import javax.swing.InputMap;
 import javax.swing.JButton;
 import javax.swing.JComponent;
@@ -32,10 +35,7 @@ import javax.swing.border.EmptyBorder;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
-import java.awt.Font;
 import java.awt.GraphicsEnvironment;
-import java.awt.GridBagConstraints;
-import java.awt.GridBagLayout;
 import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.Rectangle;
@@ -45,41 +45,64 @@ import java.awt.event.ActionEvent;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
 import java.awt.event.KeyEvent;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
 /**
  * 图形界面外壳。
  *
- * <p>负责窗口组装、响应式布局与事件分发；具体内容交给 {@code view} 包下的四个面板，
- * 配色与控件样式来自 {@code theme} 包。
+ * <h2>布局</h2>
+ * <pre>
+ * 标题栏（含侧边抽屉开关）
+ * ├─ 侧边抽屉（可折叠，控制三块内容的显示）
+ * └─ 主区
+ *    ├─ 置顶区：被「图钉」固定的卡片，不随内容滚动
+ *    └─ 滚动区：输入区 + 核心指标卡 + 未置顶的内容卡片
+ * 状态栏
+ * </pre>
+ *
+ * <h2>三块内容</h2>
+ * 购买建议、单件指标、按目标余额倒推都是 {@link SectionCard}，
+ * 因此既能被侧边开关显示 / 隐藏，也能各自用角落的图钉固定在窗口顶部。
  *
  * <h2>响应式</h2>
- * 窗口宽度跨过 {@value #WIDE_BREAKPOINT} 像素时切换布局：
- * 宽屏用「指标卡 1×4 + 明细与建议左右并排」，窄屏改为「指标卡 2×2 + 上下堆叠」，
- * 因此 1366×768 这类小屏也不会出现横向滚动条。
- * 窗口默认尺寸按屏幕可用区域的比例计算，并限制在屏幕内。
+ * 窗口宽度跨过 {@value #WIDE_BREAKPOINT} 像素时切换核心指标卡的列数；
+ * 窗口初始尺寸按屏幕可用区域计算并限制在屏内。
  */
 public final class SwingApp {
 
-    /** 宽屏断点：低于该宽度改用堆叠布局。 */
+    /** 宽屏断点：低于该宽度时指标卡改为两行 2 张。 */
     private static final int WIDE_BREAKPOINT = 1150;
 
     private static final int MIN_WIDTH = 880;
     private static final int MIN_HEIGHT = 560;
 
+    /** 置顶区最多占据窗口高度的比例，避免固定太多把滚动区挤没。 */
+    private static final double PINNED_MAX_RATIO = 0.55;
+
     private final InputPanel inputPanel = new InputPanel();
     private final MetricsPanel metricsPanel = new MetricsPanel();
-    private final DetailPanel detailPanel = new DetailPanel();
     private final AdvicePanel advicePanel = new AdvicePanel();
+    private final SingleItemPanel singleItemPanel = new SingleItemPanel();
+    private final TargetPanel targetPanel = new TargetPanel();
+    private final SideDrawer sideDrawer = new SideDrawer();
+
+    /** 默认上下顺序：购买建议 → 单件指标 → 按目标余额倒推。 */
+    private final List<SectionCard> sections = List.of(advicePanel, singleItemPanel, targetPanel);
+    private final Set<SectionCard> pinnedSections = new HashSet<>();
 
     private final JLabel statusLabel =
             UiFactory.label(" ", Theme.regular(Theme.SIZE_SMALL), Theme.TEXT_SECONDARY);
     private final JButton copyButton = UiFactory.secondaryButton("复制文本报告");
+    private final JButton drawerButton = UiFactory.secondaryButton("显示区域");
 
     private JFrame frame;
-    private JPanel splitPanel;
+    private CardPanel inputCard;
+    private ScrollablePanel contentPanel;
+    private ScrollablePanel pinnedPanel;
+    private JScrollPane pinnedScroll;
     private CalcResult lastResult;
-    private boolean wideLayout;
-    private boolean layoutInitialized;
 
     private SwingApp() {
     }
@@ -106,10 +129,6 @@ public final class SwingApp {
         compute();
     }
 
-    /**
-     * 按屏幕可用区域决定窗口大小：既让内容舒展，又保证不超出屏幕
-     * （小屏或高 DPI 缩放下会自动收缩，内容仍可纵向滚动）。
-     */
     private void applyScreenAwareSize() {
         Rectangle screen = GraphicsEnvironment.getLocalGraphicsEnvironment()
                 .getMaximumWindowBounds();
@@ -120,11 +139,9 @@ public final class SwingApp {
         int maxWidth = Math.max(minWidth, (int) (screen.width * 0.94));
         int maxHeight = Math.max(minHeight, (int) (screen.height * 0.94));
 
-        int width = clamp(preferred.width, minWidth, maxWidth);
-        int height = clamp(preferred.height, minHeight, maxHeight);
-
         frame.setMinimumSize(new Dimension(minWidth, minHeight));
-        frame.setSize(width, height);
+        frame.setSize(clamp(preferred.width, minWidth, maxWidth),
+                clamp(preferred.height, minHeight, maxHeight));
     }
 
     private static int clamp(int value, int min, int max) {
@@ -134,17 +151,26 @@ public final class SwingApp {
     // ── 界面组装 ────────────────────────────────────────────────────────────
 
     private JComponent buildRoot() {
+        inputCard = UiFactory.card(null);
+        inputCard.add(inputPanel, BorderLayout.CENTER);
+
+        JPanel body = new JPanel(new BorderLayout());
+        body.setBackground(Theme.PAGE_BG);
+        body.add(sideDrawer, BorderLayout.WEST);
+        body.add(buildMainArea(), BorderLayout.CENTER);
+
         JPanel root = new JPanel(new BorderLayout());
         root.setBackground(Theme.PAGE_BG);
-
         root.add(buildHeader(), BorderLayout.NORTH);
-        root.add(buildScrollableContent(), BorderLayout.CENTER);
+        root.add(body, BorderLayout.CENTER);
         root.add(buildStatusBar(), BorderLayout.SOUTH);
 
+        bindSections();
+        rebuildSections();
         return root;
     }
 
-    /** 顶部深蓝标题栏。 */
+    /** 顶部深蓝标题栏，右侧放侧边抽屉开关。 */
     private JComponent buildHeader() {
         JPanel header = new JPanel(new BorderLayout(Theme.GAP_LG, 0));
         header.setBackground(Theme.BRAND_DARK);
@@ -157,57 +183,55 @@ public final class SwingApp {
                 Theme.regular(Theme.SIZE_SMALL), Theme.TEXT_ON_DARK_MUTED), BorderLayout.SOUTH);
         header.add(texts, BorderLayout.WEST);
 
-        header.add(UiFactory.label("CS2 · TF2", Theme.bold(Theme.SIZE_SMALL), Theme.ACCENT),
-                BorderLayout.EAST);
+        JPanel right = UiFactory.transparentPanel(new FlowLayout(FlowLayout.RIGHT, Theme.GAP_MD, 0));
+        right.add(UiFactory.label("CS2 · TF2", Theme.bold(Theme.SIZE_SMALL), Theme.ACCENT));
+
+        drawerButton.putClientProperty("JButton.buttonType", "borderless");
+        drawerButton.setForeground(Theme.TEXT_ON_DARK);
+        drawerButton.setToolTipText("显示 / 隐藏内容区域");
+        drawerButton.addActionListener(e -> {
+            sideDrawer.toggle();
+            updateDrawerButton();
+        });
+        right.add(drawerButton);
+
+        header.add(right, BorderLayout.EAST);
         return header;
     }
 
-    private JComponent buildScrollableContent() {
-        ScrollablePanel content = new ScrollablePanel(new GridBagLayout());
-        content.setBackground(Theme.PAGE_BG);
-        content.setBorder(new EmptyBorder(Theme.GAP_LG, Theme.GAP_LG, Theme.GAP_LG, Theme.GAP_LG));
+    private void updateDrawerButton() {
+        drawerButton.setText(sideDrawer.isExpanded() ? "收起区域" : "显示区域");
+    }
 
-        GridBagConstraints c = new GridBagConstraints();
-        c.gridx = 0;
-        c.weightx = 1;
-        c.fill = GridBagConstraints.HORIZONTAL;
-        c.anchor = GridBagConstraints.NORTH;
+    /** 主区：置顶区（固定）+ 滚动区。 */
+    private JComponent buildMainArea() {
+        JPanel main = new JPanel(new BorderLayout());
+        main.setBackground(Theme.PAGE_BG);
 
-        c.gridy = 0;
-        c.insets = new Insets(0, 0, Theme.GAP_MD, 0);
-        content.add(buildInputCard(), c);
+        pinnedPanel = new ScrollablePanel(new VerticalLayout(Theme.GAP_MD));
+        pinnedPanel.setBackground(Theme.PAGE_BG);
+        pinnedPanel.setBorder(new EmptyBorder(Theme.GAP_LG, Theme.GAP_LG, 0, Theme.GAP_LG));
 
-        c.gridy = 1;
-        content.add(metricsPanel, c);
+        pinnedScroll = new JScrollPane(pinnedPanel);
+        pinnedScroll.setBorder(null);
+        pinnedScroll.setBackground(Theme.PAGE_BG);
+        pinnedScroll.getViewport().setBackground(Theme.PAGE_BG);
+        pinnedScroll.getVerticalScrollBar().setUnitIncrement(18);
+        pinnedScroll.setVisible(false);
+        main.add(pinnedScroll, BorderLayout.NORTH);
 
-        c.gridy = 2;
-        c.insets = new Insets(0, 0, 0, 0);
-        splitPanel = UiFactory.transparentPanel(new GridLayout(1, 2, Theme.GAP_MD, 0));
-        splitPanel.add(detailPanel);
-        splitPanel.add(advicePanel);
-        content.add(splitPanel, c);
+        contentPanel = new ScrollablePanel(new VerticalLayout(Theme.GAP_MD));
+        contentPanel.setBackground(Theme.PAGE_BG);
+        contentPanel.setBorder(new EmptyBorder(Theme.GAP_LG, Theme.GAP_LG, Theme.GAP_LG, Theme.GAP_LG));
 
-        // 占位：内容不足一屏时把卡片顶到上方
-        c.gridy = 3;
-        c.weighty = 1;
-        c.fill = GridBagConstraints.BOTH;
-        JPanel filler = new JPanel();
-        filler.setOpaque(false);
-        content.add(filler, c);
-
-        JScrollPane scroll = new JScrollPane(content);
+        JScrollPane scroll = new JScrollPane(contentPanel);
         scroll.setBorder(null);
         scroll.setBackground(Theme.PAGE_BG);
         scroll.getViewport().setBackground(Theme.PAGE_BG);
         scroll.getVerticalScrollBar().setUnitIncrement(18);
-        scroll.getHorizontalScrollBar().setUnitIncrement(18);
-        return scroll;
-    }
+        main.add(scroll, BorderLayout.CENTER);
 
-    private JComponent buildInputCard() {
-        CardPanel card = UiFactory.card(null);
-        card.add(inputPanel, BorderLayout.CENTER);
-        return card;
+        return main;
     }
 
     private JComponent buildStatusBar() {
@@ -234,6 +258,89 @@ public final class SwingApp {
         return bar;
     }
 
+    /** 把三块内容的置顶按钮与侧边开关接到重排逻辑上。 */
+    private void bindSections() {
+        for (SectionCard card : sections) {
+            card.onPin(pinned -> {
+                if (pinned) {
+                    pinnedSections.add(card);
+                } else {
+                    pinnedSections.remove(card);
+                }
+                rebuildSections();
+            });
+        }
+
+        sideDrawer.onSectionChanged((section, visible) -> {
+            SectionCard card = cardFor(section);
+            card.setVisible(visible);
+            if (!visible && pinnedSections.remove(card)) {
+                // 隐藏时同时取消置顶，否则它会继续占着顶部空间
+                card.setPinned(false);
+            }
+            rebuildSections();
+        });
+    }
+
+    private SectionCard cardFor(Section section) {
+        return switch (section) {
+            case ADVICE -> advicePanel;
+            case SINGLE_ITEM -> singleItemPanel;
+            case TARGET -> targetPanel;
+        };
+    }
+
+    /**
+     * 按「显示状态 + 置顶状态」重新分配三块内容：
+     * 置顶的进固定区，其余的按默认顺序排在滚动区。
+     */
+    private void rebuildSections() {
+        pinnedPanel.removeAll();
+        contentPanel.removeAll();
+
+        contentPanel.add(inputCard);
+        contentPanel.add(metricsPanel);
+
+        for (SectionCard card : sections) {
+            if (!card.isVisible()) {
+                continue;
+            }
+            if (pinnedSections.contains(card)) {
+                pinnedPanel.add(card);
+            } else {
+                contentPanel.add(card);
+            }
+        }
+
+        updatePinnedHeight();
+        pinnedPanel.revalidate();
+        contentPanel.revalidate();
+        pinnedPanel.repaint();
+        contentPanel.repaint();
+
+        // revalidate() 只是把布局排进事件队列，在「显示置顶区」这种
+        // 从不可见变可见的场景下不足以及时生效，因此这里同步跑一次 validate()。
+        if (frame != null) {
+            frame.validate();
+        }
+    }
+
+    /** 置顶区高度取内容高度，但不超过窗口高度的一定比例，超出时自身滚动。 */
+    private void updatePinnedHeight() {
+        boolean hasPinned = pinnedPanel.getComponentCount() > 0;
+        pinnedScroll.setVisible(hasPinned);
+        if (!hasPinned) {
+            return;
+        }
+
+        int contentHeight = pinnedPanel.getPreferredSize().height;
+        int maxHeight = frame == null
+                ? contentHeight
+                : Math.max(140, (int) (frame.getHeight() * PINNED_MAX_RATIO));
+        pinnedScroll.setPreferredSize(new Dimension(0, Math.min(contentHeight, maxHeight)));
+        pinnedScroll.revalidate();
+    }
+
     private void installListeners() {
         inputPanel.onChange(this::compute);
 
@@ -241,15 +348,15 @@ public final class SwingApp {
             @Override
             public void componentResized(ComponentEvent e) {
                 applyResponsiveLayout(frame.getWidth());
+                updatePinnedHeight();
             }
         });
 
         JRootPane rootPane = frame.getRootPane();
         InputMap inputMap = rootPane.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW);
         ActionMap actionMap = rootPane.getActionMap();
-        KeyStroke copyKey = KeyStroke.getKeyStroke(KeyEvent.VK_D,
-                Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx());
-        inputMap.put(copyKey, "copyReport");
+        inputMap.put(KeyStroke.getKeyStroke(KeyEvent.VK_D,
+                Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx()), "copyReport");
         actionMap.put("copyReport", new AbstractAction() {
             @Override
             public void actionPerformed(ActionEvent e) {
@@ -261,46 +368,36 @@ public final class SwingApp {
     // ── 响应式布局 ──────────────────────────────────────────────────────────
 
     private void applyResponsiveLayout(int width) {
-        boolean wide = width >= WIDE_BREAKPOINT;
-        metricsPanel.setColumns(wide ? 4 : 2);
-
-        if (layoutInitialized && wide == wideLayout) {
-            return;
-        }
-        layoutInitialized = true;
-        wideLayout = wide;
-
-        if (splitPanel != null) {
-            splitPanel.setLayout(wide
-                    ? new GridLayout(1, 2, Theme.GAP_MD, 0)
-                    : new GridLayout(2, 1, 0, Theme.GAP_MD));
-            splitPanel.revalidate();
-            splitPanel.repaint();
-        }
+        metricsPanel.setColumns(width >= WIDE_BREAKPOINT ? 4 : 2);
     }
 
     // ── 计算与交互 ──────────────────────────────────────────────────────────
 
-    /** 读取输入并刷新全部面板；输入不完整时清空结果而不弹窗打断输入。 */
     private void compute() {
         try {
             CalcResult result = BalanceCalculator.calculate(inputPanel.readRequest());
             lastResult = result;
 
             metricsPanel.update(result);
-            detailPanel.update(result);
             advicePanel.update(result);
+            singleItemPanel.update(result);
+            targetPanel.update(result);
+
+            // 卡片内容变化会改变首选高度，需要重新排布
+            rebuildSections();
 
             boolean hasCaution = !AdviceNarrator.cautions(result).isEmpty();
             statusLabel.setForeground(hasCaution ? Theme.WARNING : Theme.POSITIVE);
             statusLabel.setText("● " + ConsoleReport.renderSummaryLine(result)
-                    + (hasCaution ? "　·　见下方注意事项" : ""));
+                    + (hasCaution ? "　·　见购买建议中的注意事项" : ""));
             copyButton.setEnabled(true);
         } catch (RuntimeException e) {
             lastResult = null;
             metricsPanel.clear();
-            detailPanel.clear();
             advicePanel.clear();
+            singleItemPanel.clear();
+            targetPanel.clear();
+            rebuildSections();
 
             String message = e.getMessage() == null ? e.toString() : e.getMessage();
             statusLabel.setForeground(Theme.TEXT_MUTED);

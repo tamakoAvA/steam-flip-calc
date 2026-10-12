@@ -52,11 +52,12 @@ public final class UiFactory {
 
     /** 卡片标题：左侧一道强调竖条 + 标题文字。 */
     public static JComponent heading(String text) {
-        JPanel head = new JPanel(new FlowLayout(FlowLayout.LEFT, 7, 0));
-        head.setOpaque(false);
-        head.add(accentBar(Theme.ACCENT_DEEP));
-        head.add(title(text));
-        return head;
+        return new CardHeader(text, false);
+    }
+
+    /** 标题左侧的强调竖条，供 {@link CardHeader} 与自定义头部复用。 */
+    public static JComponent accentBar() {
+        return accentBar(Theme.ACCENT_DEEP);
     }
 
     private static JComponent accentBar(Color color) {

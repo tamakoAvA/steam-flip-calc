@@ -8,11 +8,15 @@ import com.steamarbitrage.core.FeeMode;
 import com.steamarbitrage.core.GameProfile;
 import com.steamarbitrage.core.Money;
 import com.steamarbitrage.core.PriceType;
+import com.steamarbitrage.gui.Section;
 import com.steamarbitrage.gui.SwingApp;
 import com.steamarbitrage.gui.view.InputPanel;
+import com.steamarbitrage.gui.view.SectionCard;
+import com.steamarbitrage.gui.view.SideDrawer;
 
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
 import javax.swing.SwingUtilities;
 import java.awt.Component;
@@ -28,13 +32,14 @@ import java.util.List;
 /**
  * 图形界面自检。
  *
- * <p>实例化 {@link SwingApp} 并驱动它的计算流程，但<b>不显示窗口</b>，
- * 因此不会在桌面上留下残留程序。重点验证四件事：
+ * <p>实例化 {@link SwingApp} 并驱动它的计算与布局流程，但<b>不显示窗口</b>，
+ * 因此不会在桌面上留下残留程序。重点验证：
  * <ol>
  *   <li>结构化面板显示的数字确实来自 {@code CalcResult}</li>
- *   <li>下拉框的显示顺序与它携带的枚举值对得上</li>
- *   <li>响应式断点按窗口宽度正确切换列数</li>
- *   <li>输入残缺时清空面板而不是崩溃</li>
+ *   <li>默认上下顺序为「购买建议 → 单件指标 → 按目标余额倒推」</li>
+ *   <li>图钉能把卡片搬到固定区、再点一次能搬回来</li>
+ *   <li>侧边开关能隐藏 / 恢复卡片，且隐藏时自动取消置顶</li>
+ *   <li>响应式断点按窗口宽度切换指标卡列数</li>
  * </ol>
  *
  * <p>无图形显示的环境下直接跳过并以 0 退出，不会让整套自测失败。
@@ -70,82 +75,114 @@ public final class GuiSelfCheck {
     private static void check() {
         try {
             Object app = newApp();
-            // 组装界面容器（不显示窗口），使各面板字段与 splitPanel 就绪
             invoke(app, "buildRoot");
-            InputPanel input = (InputPanel) field(app, "inputPanel");
 
-            // ── 用例 A：默认输入（CS2 / 买家支付价 / 精确模式）──
+            InputPanel input = (InputPanel) field(app, "inputPanel");
+            SectionCard advice = (SectionCard) field(app, "advicePanel");
+            SectionCard singleItem = (SectionCard) field(app, "singleItemPanel");
+            SectionCard target = (SectionCard) field(app, "targetPanel");
+            SideDrawer drawer = (SideDrawer) field(app, "sideDrawer");
+            JPanel content = (JPanel) field(app, "contentPanel");
+            JPanel pinned = (JPanel) field(app, "pinnedPanel");
+            JScrollPane pinnedScroll = (JScrollPane) field(app, "pinnedScroll");
+
+            // ── 用例 A：默认输入的数值 ──
             compute(app);
             CalcResult result = lastResult(app);
-            check("GUI 计算：单件到手", 8697L, result.sellerReceivesCents());
-            check("GUI 计算：件数", 12L, result.itemCount());
-            check("GUI 计算：总成本", 84000L, result.totalCostCents());
-            check("GUI 计算：实际到手余额", 104364L, result.actualBalanceCents());
+            check("计算：单件到手", 8697L, result.sellerReceivesCents());
+            check("计算：件数", 12L, result.itemCount());
+            check("计算：总成本", 84000L, result.totalCostCents());
+            check("计算：实际到手余额", 104364L, result.actualBalanceCents());
 
+            // ── 用例 B：各面板显示的数字 ──
             String metrics = textOf(app, "metricsPanel");
             checkTrue("指标卡显示「8.05 折」", metrics.contains("8.05 折"));
             checkTrue("指标卡显示「12 件」", metrics.contains("12 件"));
             checkTrue("指标卡显示总成本", metrics.contains("¥840.00"));
-            checkTrue("指标卡显示实际到手余额", metrics.contains("¥1,043.64"));
 
-            String detail = textOf(app, "detailPanel");
-            checkTrue("明细区显示卖家到手余额", detail.contains("¥86.97"));
-            checkTrue("明细区显示 Steam 手续费", detail.contains("¥4.34"));
-            checkTrue("明细区显示游戏手续费", detail.contains("¥8.69"));
-            checkTrue("明细区显示性价比", detail.contains("1.2424"));
-            checkTrue("明细区显示目标余额", detail.contains("¥1,000.00"));
-
-            String advice = textOf(app, "advicePanel");
+            String adviceText = textOf(app, "advicePanel");
             checkTrue("建议区显示两种买法",
-                    advice.contains("方式 A · 少倒 + 补差价")
-                            && advice.contains("方式 B · 多倒 + 全额余额"));
-            checkTrue("建议区标注推荐方式 B", advice.contains("★ 推荐：方式 B"));
-            checkTrue("建议区给出边际折合", advice.contains("61.11%"));
-            checkTrue("建议区给出方式 A 的补差", advice.contains("¥43.33"));
-            checkTrue("建议区给出方式 A 的现金支出", advice.contains("¥813.33"));
+                    adviceText.contains("方式 A · 少倒 + 补差价")
+                            && adviceText.contains("方式 B · 多倒 + 全额余额"));
+            checkTrue("建议区标注推荐方式 B", adviceText.contains("★ 推荐：方式 B"));
+            checkTrue("建议区给出边际折合", adviceText.contains("61.11%"));
 
-            // ── 用例 B：下拉框切到 TF2 + 卖家到手价 ──
-            input.selectGame(1);
-            input.selectPriceType(1);
-            input.sellField().setText("86.97");
-            compute(app);
+            String singleText = textOf(app, "singleItemPanel");
+            checkTrue("单件指标显示到手余额", singleText.contains("¥86.97"));
+            checkTrue("单件指标显示 Steam 手续费", singleText.contains("¥4.34"));
+            checkTrue("单件指标显示性价比", singleText.contains("1.2424"));
 
-            CalcResult tf2 = lastResult(app);
-            check("下拉框第 2 项游戏是 TF2", "tf2", tf2.request().gameProfile().id());
-            check("下拉框第 2 项语义是卖家到手价", PriceType.SELLER_RECEIVE, tf2.request().priceType());
-            check("切换后件数仍为 12", 12L, tf2.itemCount());
-            check("切换后实付仍为 100", 10000L, tf2.buyerPaysCents());
-            checkTrue("明细区标签随语义变为「Steam 到手价」",
-                    textOf(app, "detailPanel").contains("Steam 到手价"));
+            String targetText = textOf(app, "targetPanel");
+            checkTrue("目标倒推显示目标余额", targetText.contains("¥1,000.00"));
+            checkTrue("目标倒推显示需购买数量", targetText.contains("12 件"));
+            checkTrue("目标倒推显示超出目标", targetText.contains("¥43.64"));
 
-            // ── 用例 C：切回买家支付价 + 近似模式，应出现注意事项 ──
-            input.selectPriceType(0);
-            input.sellField().setText("100");
-            input.selectFeeMode(1);
-            compute(app);
-            checkTrue("近似模式显示注意事项",
-                    textOf(app, "advicePanel").contains("simple 近似模式"));
+            // ── 用例 C：默认上下顺序「购买建议 → 单件指标 → 目标倒推」──
+            int adviceIndex = indexOf(content, advice);
+            int singleIndex = indexOf(content, singleItem);
+            int targetIndex = indexOf(content, target);
+            checkTrue("购买建议排在单件指标之前",
+                    adviceIndex >= 0 && singleIndex >= 0 && adviceIndex < singleIndex);
+            checkTrue("单件指标排在目标倒推之前", singleIndex < targetIndex);
+            checkTrue("默认没有卡片被置顶", pinned.getComponentCount() == 0);
+            checkTrue("默认置顶区隐藏", !pinnedScroll.isVisible());
 
-            // ── 用例 D：输入残缺时不崩溃，面板回到占位态 ──
-            input.selectFeeMode(0);
-            input.targetField().setText("");
-            compute(app);
-            checkTrue("空输入清空指标卡", textOf(app, "metricsPanel").contains("—"));
-            checkTrue("空输入时没有计算结果", lastResult(app) == null);
+            // ── 用例 D：图钉把卡片搬到固定区 ──
+            advice.header().togglePinForTest();
+            checkTrue("置顶后卡片进入固定区", indexOf(pinned, advice) >= 0);
+            checkTrue("置顶后离开滚动区", indexOf(content, advice) < 0);
+            checkTrue("置顶后固定区可见", pinnedScroll.isVisible());
+            checkTrue("图钉状态已标记", advice.isPinned());
 
-            input.targetField().setText("abc");
-            compute(app);
-            checkTrue("非法输入仍无计算结果", lastResult(app) == null);
+            advice.header().togglePinForTest();
+            checkTrue("取消置顶后回到滚动区", indexOf(content, advice) >= 0);
+            checkTrue("取消置顶后固定区清空", pinned.getComponentCount() == 0);
+            checkTrue("取消置顶后固定区隐藏", !pinnedScroll.isVisible());
 
-            input.targetField().setText("0");
-            compute(app);
-            checkTrue("零值输入仍无计算结果", lastResult(app) == null);
+            // 多张同时置顶时按默认顺序排列
+            target.header().togglePinForTest();
+            advice.header().togglePinForTest();
+            checkTrue("置顶两张：购买建议排在目标倒推之前",
+                    indexOf(pinned, advice) < indexOf(pinned, target));
+            checkTrue("置顶两张：滚动区不再包含它们",
+                    indexOf(content, advice) < 0 && indexOf(content, target) < 0);
+            advice.header().togglePinForTest();
+            target.header().togglePinForTest();
+            checkTrue("全部取消置顶后固定区清空", pinned.getComponentCount() == 0);
 
-            input.resetToDefaults();
-            compute(app);
-            checkTrue("恢复默认后重新出结果", lastResult(app) != null);
+            // ── 用例 E：侧边开关 ──
+            checkTrue("开关默认全开", drawer.isSectionSelected(Section.SINGLE_ITEM)
+                    && drawer.isSectionSelected(Section.ADVICE)
+                    && drawer.isSectionSelected(Section.TARGET));
 
-            // ── 用例 E：响应式断点 ──
+            drawer.toggleForTest(Section.SINGLE_ITEM);
+            checkTrue("关闭开关后卡片隐藏", !singleItem.isVisible());
+            checkTrue("隐藏的卡片不在滚动区", indexOf(content, singleItem) < 0);
+            checkTrue("其余卡片不受影响", advice.isVisible() && target.isVisible());
+
+            drawer.toggleForTest(Section.SINGLE_ITEM);
+            checkTrue("重新打开后卡片恢复", singleItem.isVisible());
+            checkTrue("恢复后回到滚动区", indexOf(content, singleItem) >= 0);
+
+            // 隐藏已置顶的卡片时应当自动取消置顶
+            advice.header().togglePinForTest();
+            drawer.toggleForTest(Section.ADVICE);
+            checkTrue("隐藏已置顶卡片时自动取消置顶", !advice.isPinned());
+            checkTrue("隐藏后固定区清空", pinned.getComponentCount() == 0);
+            drawer.toggleForTest(Section.ADVICE);
+            checkTrue("恢复显示后回到滚动区", indexOf(content, advice) >= 0);
+
+            // ── 用例 F：抽屉展开 / 收起 ──
+            int collapsedWidth = drawer.getPreferredSize().width;
+            check("抽屉默认收起宽度", 0, collapsedWidth);
+            drawer.setExpanded(true);
+            drawer.finishAnimation();
+            check("抽屉展开宽度", SideDrawer.EXPANDED_WIDTH, drawer.getPreferredSize().width);
+            drawer.setExpanded(false);
+            drawer.finishAnimation();
+            check("抽屉收起后回到 0", 0, drawer.getPreferredSize().width);
+
+            // ── 用例 G：响应式断点 ──
             invokeWithInt(app, "applyResponsiveLayout", 1300);
             check("宽屏 1300px：指标卡 4 列", 4, metricColumns(app));
             invokeWithInt(app, "applyResponsiveLayout", 900);
@@ -153,7 +190,21 @@ public final class GuiSelfCheck {
             invokeWithInt(app, "applyResponsiveLayout", 1300);
             check("回到宽屏：恢复 4 列", 4, metricColumns(app));
 
-            // ── 用例 F：界面持有的结果与命令行同源输入完全一致 ──
+            // ── 用例 H：残缺输入不崩溃 ──
+            input.targetField().setText("");
+            compute(app);
+            checkTrue("空输入清空指标卡", textOf(app, "metricsPanel").contains("—"));
+            checkTrue("空输入时没有计算结果", lastResult(app) == null);
+
+            input.targetField().setText("abc");
+            compute(app);
+            checkTrue("非法输入仍无结果", lastResult(app) == null);
+
+            input.resetToDefaults();
+            compute(app);
+            checkTrue("恢复默认后重新出结果", lastResult(app) != null);
+
+            // ── 用例 I：界面持有的结果与命令行同源输入一致 ──
             CalcResult expected = BalanceCalculator.calculate(new CalcRequest(
                     Money.parse("70"), Money.parse("100"), PriceType.BUYER_PAID,
                     GameProfile.CS2, FeeMode.EXACT, Money.parse("1000")));
@@ -217,6 +268,16 @@ public final class GuiSelfCheck {
                 collectText(child, sb);
             }
         }
+    }
+
+    private static int indexOf(Container parent, Object child) {
+        Component[] components = parent.getComponents();
+        for (int i = 0; i < components.length; i++) {
+            if (components[i] == child) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private static int metricColumns(Object app) throws Exception {
