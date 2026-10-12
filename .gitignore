@@ -1,6 +1,9 @@
 # 编译产物
 out/
 
+# 可选运行时依赖（由 download-deps.ps1 自动获取，不入库）
+lib/
+
 # IDE
 .idea/
 *.iml

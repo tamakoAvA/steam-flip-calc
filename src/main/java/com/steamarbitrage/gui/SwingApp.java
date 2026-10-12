@@ -1,247 +1,331 @@
 package com.steamarbitrage.gui;
 
 import com.steamarbitrage.cli.ConsoleReport;
+import com.steamarbitrage.core.AdviceNarrator;
 import com.steamarbitrage.core.BalanceCalculator;
-import com.steamarbitrage.core.CalcRequest;
 import com.steamarbitrage.core.CalcResult;
-import com.steamarbitrage.core.FeeMode;
-import com.steamarbitrage.core.GameProfile;
-import com.steamarbitrage.core.Money;
-import com.steamarbitrage.core.PriceType;
+import com.steamarbitrage.gui.theme.CardPanel;
+import com.steamarbitrage.gui.theme.ScrollablePanel;
+import com.steamarbitrage.gui.theme.Theme;
+import com.steamarbitrage.gui.theme.UiFactory;
+import com.steamarbitrage.gui.view.AdvicePanel;
+import com.steamarbitrage.gui.view.DetailPanel;
+import com.steamarbitrage.gui.view.InputPanel;
+import com.steamarbitrage.gui.view.MetricsPanel;
 
+import javax.swing.AbstractAction;
+import javax.swing.ActionMap;
 import javax.swing.BorderFactory;
-import javax.swing.DefaultComboBoxModel;
+import javax.swing.Box;
+import javax.swing.InputMap;
 import javax.swing.JButton;
-import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.JRootPane;
 import javax.swing.JScrollPane;
-import javax.swing.JTextArea;
-import javax.swing.JTextField;
+import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
-import javax.swing.UIManager;
-import javax.swing.event.DocumentEvent;
-import javax.swing.event.DocumentListener;
+import javax.swing.Timer;
+import javax.swing.border.EmptyBorder;
 import java.awt.BorderLayout;
-import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
+import java.awt.GraphicsEnvironment;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
+import java.awt.GridLayout;
 import java.awt.Insets;
+import java.awt.Rectangle;
+import java.awt.Toolkit;
+import java.awt.datatransfer.StringSelection;
+import java.awt.event.ActionEvent;
+import java.awt.event.ComponentAdapter;
+import java.awt.event.ComponentEvent;
+import java.awt.event.KeyEvent;
 
 /**
- * Swing 图形界面。
+ * 图形界面外壳。
  *
- * <p>只依赖 JDK 自带的 {@code java.desktop}，没有任何第三方 UI 库。
- * 三个输入框都装了 {@code DocumentListener}，边打字边出结果；
- * 报告正文直接复用 {@link ConsoleReport}，保证界面与命令行给出完全一致的数字。
+ * <p>负责窗口组装、响应式布局与事件分发；具体内容交给 {@code view} 包下的四个面板，
+ * 配色与控件样式来自 {@code theme} 包。
+ *
+ * <h2>响应式</h2>
+ * 窗口宽度跨过 {@value #WIDE_BREAKPOINT} 像素时切换布局：
+ * 宽屏用「指标卡 1×4 + 明细与建议左右并排」，窄屏改为「指标卡 2×2 + 上下堆叠」，
+ * 因此 1366×768 这类小屏也不会出现横向滚动条。
+ * 窗口默认尺寸按屏幕可用区域的比例计算，并限制在屏幕内。
  */
 public final class SwingApp {
 
-    private static final Color TEXT_NORMAL = new Color(0x1A, 0x1A, 0x1A);
-    private static final Color TEXT_HINT = new Color(0x90, 0x90, 0x90);
-    private static final Color STATUS_OK = new Color(0x11, 0x66, 0x22);
-    private static final Color STATUS_WARN = new Color(0x99, 0x55, 0x00);
-    private static final Color STATUS_ERROR = new Color(0xAA, 0x22, 0x22);
+    /** 宽屏断点：低于该宽度改用堆叠布局。 */
+    private static final int WIDE_BREAKPOINT = 1150;
 
-    private final JComboBox<Choice<GameProfile>> gameBox;
-    private final JComboBox<Choice<PriceType>> priceTypeBox;
-    private final JComboBox<Choice<FeeMode>> feeModeBox;
+    private static final int MIN_WIDTH = 880;
+    private static final int MIN_HEIGHT = 560;
 
-    private final JTextField purchaseField = new JTextField("70", 16);
-    private final JTextField sellField = new JTextField("100", 16);
-    private final JTextField targetField = new JTextField("1000", 16);
+    private final InputPanel inputPanel = new InputPanel();
+    private final MetricsPanel metricsPanel = new MetricsPanel();
+    private final DetailPanel detailPanel = new DetailPanel();
+    private final AdvicePanel advicePanel = new AdvicePanel();
 
-    private final JTextArea reportArea = new JTextArea();
-    private final JLabel statusLabel = new JLabel(" ");
+    private final JLabel statusLabel =
+            UiFactory.label(" ", Theme.regular(Theme.SIZE_SMALL), Theme.TEXT_SECONDARY);
+    private final JButton copyButton = UiFactory.secondaryButton("复制文本报告");
+
+    private JFrame frame;
+    private JPanel splitPanel;
+    private CalcResult lastResult;
+    private boolean wideLayout;
+    private boolean layoutInitialized;
 
     private SwingApp() {
-        DefaultComboBoxModel<Choice<GameProfile>> gameModel = new DefaultComboBoxModel<>();
-        for (GameProfile profile : GameProfile.builtIns()) {
-            gameModel.addElement(new Choice<>(
-                    profile.displayName() + " — " + profile.feeDescription(), profile));
-        }
-        gameBox = new JComboBox<>(gameModel);
-
-        DefaultComboBoxModel<Choice<PriceType>> priceModel = new DefaultComboBoxModel<>();
-        priceModel.addElement(new Choice<>(
-                "买家支付价（Steam 市场挂单价）— 程序自动扣手续费", PriceType.BUYER_PAID));
-        priceModel.addElement(new Choice<>(
-                "卖家到手价（Steam 卖家收入）— 程序不再扣手续费", PriceType.SELLER_RECEIVE));
-        priceTypeBox = new JComboBox<>(priceModel);
-
-        DefaultComboBoxModel<Choice<FeeMode>> feeModel = new DefaultComboBoxModel<>();
-        feeModel.addElement(new Choice<>(
-                "精确反解 — 与 Steam 页面显示的卖家收入一致", FeeMode.EXACT));
-        feeModel.addElement(new Choice<>(
-                "粗略近似 — 售价 ÷ 1.15 向下取整", FeeMode.SIMPLE));
-        feeModeBox = new JComboBox<>(feeModel);
     }
 
     /** 启动图形界面（非阻塞）。 */
     public static void launch() {
-        try {
-            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-        } catch (Exception ignored) {
-            // 系统外观不可用时保持 Swing 默认外观
-        }
+        Theme.install();
         SwingUtilities.invokeLater(() -> new SwingApp().show());
     }
 
     private void show() {
-        JFrame frame = new JFrame("Steam 倒余额计算器");
+        frame = new JFrame("Steam 倒余额计算器");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         frame.setContentPane(buildRoot());
         frame.pack();
-        frame.setMinimumSize(new Dimension(840, 700));
+
+        installListeners();
+        applyScreenAwareSize();
+
         frame.setLocationRelativeTo(null);
         frame.setVisible(true);
+
+        applyResponsiveLayout(frame.getWidth());
         compute();
     }
 
+    /**
+     * 按屏幕可用区域决定窗口大小：既让内容舒展，又保证不超出屏幕
+     * （小屏或高 DPI 缩放下会自动收缩，内容仍可纵向滚动）。
+     */
+    private void applyScreenAwareSize() {
+        Rectangle screen = GraphicsEnvironment.getLocalGraphicsEnvironment()
+                .getMaximumWindowBounds();
+        Dimension preferred = frame.getPreferredSize();
+
+        int minWidth = Math.min(MIN_WIDTH, (int) (screen.width * 0.92));
+        int minHeight = Math.min(MIN_HEIGHT, (int) (screen.height * 0.92));
+        int maxWidth = Math.max(minWidth, (int) (screen.width * 0.94));
+        int maxHeight = Math.max(minHeight, (int) (screen.height * 0.94));
+
+        int width = clamp(preferred.width, minWidth, maxWidth);
+        int height = clamp(preferred.height, minHeight, maxHeight);
+
+        frame.setMinimumSize(new Dimension(minWidth, minHeight));
+        frame.setSize(width, height);
+    }
+
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    // ── 界面组装 ────────────────────────────────────────────────────────────
+
     private JComponent buildRoot() {
         JPanel root = new JPanel(new BorderLayout());
+        root.setBackground(Theme.PAGE_BG);
 
-        JPanel top = new JPanel(new BorderLayout());
-        top.add(buildForm(), BorderLayout.CENTER);
-        top.add(buildButtons(), BorderLayout.SOUTH);
-        root.add(top, BorderLayout.NORTH);
+        root.add(buildHeader(), BorderLayout.NORTH);
+        root.add(buildScrollableContent(), BorderLayout.CENTER);
+        root.add(buildStatusBar(), BorderLayout.SOUTH);
 
-        reportArea.setEditable(false);
-        reportArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 13));
-        reportArea.setMargin(new Insets(10, 12, 10, 12));
-        reportArea.setBackground(new Color(0xFC, 0xFC, 0xFC));
-        JScrollPane scroll = new JScrollPane(reportArea);
-        scroll.setPreferredSize(new Dimension(800, 560));
-        root.add(scroll, BorderLayout.CENTER);
-
-        statusLabel.setBorder(BorderFactory.createEmptyBorder(6, 12, 8, 12));
-        statusLabel.setFont(statusLabel.getFont().deriveFont(Font.PLAIN, 12f));
-        root.add(statusLabel, BorderLayout.SOUTH);
-
-        installLiveUpdate();
         return root;
     }
 
-    private JComponent buildForm() {
-        JPanel form = new JPanel(new GridBagLayout());
-        form.setBorder(BorderFactory.createEmptyBorder(12, 14, 4, 14));
+    /** 顶部深蓝标题栏。 */
+    private JComponent buildHeader() {
+        JPanel header = new JPanel(new BorderLayout(Theme.GAP_LG, 0));
+        header.setBackground(Theme.BRAND_DARK);
+        header.setBorder(new EmptyBorder(Theme.GAP_MD, Theme.GAP_LG, Theme.GAP_MD, Theme.GAP_LG));
 
-        int row = 0;
-        addRow(form, row++, "游戏手续费档案", gameBox);
-        addRow(form, row++, "Steam 售价含义", priceTypeBox);
-        addRow(form, row++, "手续费换算模式", feeModeBox);
-        addRow(form, row++, "饰品购入价（元）", purchaseField);
-        addRow(form, row++, "Steam 售价（元）", sellField);
-        addRow(form, row, "目标 Steam 余额（元）", targetField);
-        return form;
+        JPanel texts = UiFactory.transparentPanel(new BorderLayout(0, 2));
+        texts.add(UiFactory.label("Steam 倒余额计算器", Theme.bold(19), Theme.TEXT_ON_DARK),
+                BorderLayout.NORTH);
+        texts.add(UiFactory.label("输入饰品购入价与 Steam 市场售价，算出折合折扣与所需件数",
+                Theme.regular(Theme.SIZE_SMALL), Theme.TEXT_ON_DARK_MUTED), BorderLayout.SOUTH);
+        header.add(texts, BorderLayout.WEST);
+
+        header.add(UiFactory.label("CS2 · TF2", Theme.bold(Theme.SIZE_SMALL), Theme.ACCENT),
+                BorderLayout.EAST);
+        return header;
     }
 
-    private static void addRow(JPanel panel, int row, String label, JComponent field) {
+    private JComponent buildScrollableContent() {
+        ScrollablePanel content = new ScrollablePanel(new GridBagLayout());
+        content.setBackground(Theme.PAGE_BG);
+        content.setBorder(new EmptyBorder(Theme.GAP_LG, Theme.GAP_LG, Theme.GAP_LG, Theme.GAP_LG));
+
         GridBagConstraints c = new GridBagConstraints();
-        c.insets = new Insets(3, 4, 3, 4);
-        c.anchor = GridBagConstraints.WEST;
-
         c.gridx = 0;
-        c.gridy = row;
-        c.weightx = 0;
-        c.fill = GridBagConstraints.NONE;
-        panel.add(new JLabel(label), c);
-
-        c.gridx = 1;
-        c.gridy = row;
         c.weightx = 1;
         c.fill = GridBagConstraints.HORIZONTAL;
-        panel.add(field, c);
+        c.anchor = GridBagConstraints.NORTH;
+
+        c.gridy = 0;
+        c.insets = new Insets(0, 0, Theme.GAP_MD, 0);
+        content.add(buildInputCard(), c);
+
+        c.gridy = 1;
+        content.add(metricsPanel, c);
+
+        c.gridy = 2;
+        c.insets = new Insets(0, 0, 0, 0);
+        splitPanel = UiFactory.transparentPanel(new GridLayout(1, 2, Theme.GAP_MD, 0));
+        splitPanel.add(detailPanel);
+        splitPanel.add(advicePanel);
+        content.add(splitPanel, c);
+
+        // 占位：内容不足一屏时把卡片顶到上方
+        c.gridy = 3;
+        c.weighty = 1;
+        c.fill = GridBagConstraints.BOTH;
+        JPanel filler = new JPanel();
+        filler.setOpaque(false);
+        content.add(filler, c);
+
+        JScrollPane scroll = new JScrollPane(content);
+        scroll.setBorder(null);
+        scroll.setBackground(Theme.PAGE_BG);
+        scroll.getViewport().setBackground(Theme.PAGE_BG);
+        scroll.getVerticalScrollBar().setUnitIncrement(18);
+        scroll.getHorizontalScrollBar().setUnitIncrement(18);
+        return scroll;
     }
 
-    private JComponent buildButtons() {
-        JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
-        panel.setBorder(BorderFactory.createEmptyBorder(0, 12, 4, 12));
+    private JComponent buildInputCard() {
+        CardPanel card = UiFactory.card(null);
+        card.add(inputPanel, BorderLayout.CENTER);
+        return card;
+    }
 
-        JButton clearButton = new JButton("清空");
-        clearButton.addActionListener(e -> {
-            purchaseField.setText("");
-            sellField.setText("");
-            targetField.setText("");
+    private JComponent buildStatusBar() {
+        JPanel bar = new JPanel(new BorderLayout(Theme.GAP_MD, 0));
+        bar.setBackground(Theme.CARD_BG);
+        bar.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(1, 0, 0, 0, Theme.BORDER),
+                new EmptyBorder(Theme.GAP_SM, Theme.GAP_LG, Theme.GAP_SM, Theme.GAP_LG)));
+
+        bar.add(statusLabel, BorderLayout.CENTER);
+
+        JPanel buttons = UiFactory.transparentPanel(new FlowLayout(FlowLayout.RIGHT, Theme.GAP_SM, 0));
+        copyButton.setToolTipText("把与命令行完全一致的文本报告复制到剪贴板（Ctrl+D）");
+        copyButton.addActionListener(e -> copyReport());
+        JButton resetButton = UiFactory.secondaryButton("恢复默认");
+        resetButton.addActionListener(e -> {
+            inputPanel.resetToDefaults();
+            compute();
+        });
+        buttons.add(copyButton);
+        buttons.add(resetButton);
+        bar.add(buttons, BorderLayout.EAST);
+
+        return bar;
+    }
+
+    private void installListeners() {
+        inputPanel.onChange(this::compute);
+
+        frame.addComponentListener(new ComponentAdapter() {
+            @Override
+            public void componentResized(ComponentEvent e) {
+                applyResponsiveLayout(frame.getWidth());
+            }
         });
 
-        panel.add(clearButton);
-        return panel;
+        JRootPane rootPane = frame.getRootPane();
+        InputMap inputMap = rootPane.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW);
+        ActionMap actionMap = rootPane.getActionMap();
+        KeyStroke copyKey = KeyStroke.getKeyStroke(KeyEvent.VK_D,
+                Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx());
+        inputMap.put(copyKey, "copyReport");
+        actionMap.put("copyReport", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                copyReport();
+            }
+        });
     }
 
-    private void installLiveUpdate() {
-        DocumentListener listener = new DocumentListener() {
-            @Override
-            public void insertUpdate(DocumentEvent e) {
-                compute();
-            }
+    // ── 响应式布局 ──────────────────────────────────────────────────────────
 
-            @Override
-            public void removeUpdate(DocumentEvent e) {
-                compute();
-            }
+    private void applyResponsiveLayout(int width) {
+        boolean wide = width >= WIDE_BREAKPOINT;
+        metricsPanel.setColumns(wide ? 4 : 2);
 
-            @Override
-            public void changedUpdate(DocumentEvent e) {
-                compute();
-            }
-        };
-        purchaseField.getDocument().addDocumentListener(listener);
-        sellField.getDocument().addDocumentListener(listener);
-        targetField.getDocument().addDocumentListener(listener);
+        if (layoutInitialized && wide == wideLayout) {
+            return;
+        }
+        layoutInitialized = true;
+        wideLayout = wide;
 
-        gameBox.addActionListener(e -> compute());
-        priceTypeBox.addActionListener(e -> compute());
-        feeModeBox.addActionListener(e -> compute());
+        if (splitPanel != null) {
+            splitPanel.setLayout(wide
+                    ? new GridLayout(1, 2, Theme.GAP_MD, 0)
+                    : new GridLayout(2, 1, 0, Theme.GAP_MD));
+            splitPanel.revalidate();
+            splitPanel.repaint();
+        }
     }
 
-    /** 读取当前输入并刷新报告；输入不完整时只给出灰色提示，不弹窗打断输入。 */
+    // ── 计算与交互 ──────────────────────────────────────────────────────────
+
+    /** 读取输入并刷新全部面板；输入不完整时清空结果而不弹窗打断输入。 */
     private void compute() {
         try {
-            GameProfile game = selected(gameBox);
-            PriceType priceType = selected(priceTypeBox);
-            FeeMode feeMode = selected(feeModeBox);
+            CalcResult result = BalanceCalculator.calculate(inputPanel.readRequest());
+            lastResult = result;
 
-            Money purchasePrice = Money.parse(purchaseField.getText());
-            Money marketPrice = Money.parse(sellField.getText());
-            Money target = Money.parse(targetField.getText());
+            metricsPanel.update(result);
+            detailPanel.update(result);
+            advicePanel.update(result);
 
-            CalcResult result = BalanceCalculator.calculate(new CalcRequest(
-                    purchasePrice, marketPrice, priceType, game, feeMode, target));
-
-            reportArea.setForeground(TEXT_NORMAL);
-            reportArea.setText(ConsoleReport.render(result));
-            reportArea.setCaretPosition(0);
-
-            String warnings = ConsoleReport.warnings(result);
-            statusLabel.setForeground(warnings.isEmpty() ? STATUS_OK : STATUS_WARN);
-            statusLabel.setText(" " + ConsoleReport.renderSummaryLine(result)
-                    + (warnings.isEmpty() ? "" : "    见下方注意事项"));
+            boolean hasCaution = !AdviceNarrator.cautions(result).isEmpty();
+            statusLabel.setForeground(hasCaution ? Theme.WARNING : Theme.POSITIVE);
+            statusLabel.setText("● " + ConsoleReport.renderSummaryLine(result)
+                    + (hasCaution ? "　·　见下方注意事项" : ""));
+            copyButton.setEnabled(true);
         } catch (RuntimeException e) {
+            lastResult = null;
+            metricsPanel.clear();
+            detailPanel.clear();
+            advicePanel.clear();
+
             String message = e.getMessage() == null ? e.toString() : e.getMessage();
-            reportArea.setForeground(TEXT_HINT);
-            reportArea.setText("等待有效输入…\n\n" + message + "\n");
-            reportArea.setCaretPosition(0);
-            statusLabel.setForeground(STATUS_ERROR);
-            statusLabel.setText(" " + message);
+            statusLabel.setForeground(Theme.TEXT_MUTED);
+            statusLabel.setText("等待有效输入：" + message);
+            copyButton.setEnabled(false);
         }
     }
 
-    private static <T> T selected(JComboBox<Choice<T>> box) {
-        Choice<T> choice = box.getItemAt(box.getSelectedIndex());
-        return choice == null ? null : choice.value();
-    }
-
-    /** 下拉框条目：显示中文说明，携带真正的枚举值。 */
-    private record Choice<T>(String label, T value) {
-        @Override
-        public String toString() {
-            return label;
+    /** 复制与命令行完全一致的文本报告。 */
+    private void copyReport() {
+        if (lastResult == null) {
+            return;
         }
+        StringBuilder text = new StringBuilder(ConsoleReport.render(lastResult));
+        String warnings = ConsoleReport.warnings(lastResult);
+        if (!warnings.isEmpty()) {
+            text.append('\n').append(warnings);
+        }
+        Toolkit.getDefaultToolkit().getSystemClipboard()
+                .setContents(new StringSelection(text.toString()), null);
+
+        statusLabel.setForeground(Theme.POSITIVE);
+        statusLabel.setText("● 已复制完整文本报告到剪贴板");
+        Timer restore = new Timer(1800, e -> compute());
+        restore.setRepeats(false);
+        restore.start();
     }
 }

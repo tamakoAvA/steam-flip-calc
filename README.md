@@ -4,16 +4,28 @@
 与在 Steam 社区市场的**售价**，输出**折合折扣**、为拿到目标 Steam 余额**需要买几件**，
 并在「少倒 + 补差价」与「多倒 + 全额余额」两种买法之间**给出推荐**。
 
-- 纯 JDK 实现，**零第三方依赖**，不需要 Maven / Gradle，`javac` 直接编译
+![图形界面](docs/screenshots/gui-wide.png)
+
+- **编译期零依赖**：只要 JDK 就能 `javac` 编译，不需要 Maven / Gradle
 - 命令行与 Swing 图形界面两条入口，共用同一套算法，数字完全一致
+- 界面可选启用 [FlatLaf](https://www.formdev.com/flatlaf/) 现代外观，缺失时自动回退系统外观
 - 手续费按游戏配置，内置 **CS2** 与 **TF2**
 - 金额全程按「分」做整数运算，不出现 `double`——浮点误差足以让「需购买件数」整整差一件
 
 ---
 
-## 一、环境要求
+## 一、环境要求与依赖
 
-JDK 17 或更高（本项目在 OpenJDK 25.0.2 上编译运行，源码以 `--release 17` 校验兼容性）。
+**JDK 17 或更高**（本项目在 OpenJDK 25.0.2 上编译运行，源码以 `--release 17` 校验兼容性）。
+
+依赖分两层，这样「克隆下来就能编译」永远成立：
+
+| 层 | 依赖 | 说明 |
+|---|---|---|
+| 编译期 | **无** | `javac` 只需要 JDK。FlatLaf 通过 `UIManager.setLookAndFeel(类名)` 反射加载，源码里不出现任何第三方类型 |
+| 运行期 | 可选 FlatLaf | 只影响图形界面观感。`.\download-deps.ps1` 自动下载到 `lib\`（自动探测系统代理、幂等）；没有它时回退系统外观，功能完全一致 |
+
+`lib\` 已在 `.gitignore` 中，仓库不放二进制；`run-gui.ps1` 首次运行会自动拉取一次。
 
 ---
 
@@ -34,9 +46,13 @@ JDK 17 或更高（本项目在 OpenJDK 25.0.2 上编译运行，源码以 `--re
 
 # 跑自测
 .\run-tests.ps1
+
+# 手动拉取可选的界面美化依赖（run-gui.ps1 会自动做，一般不必手动执行）
+.\download-deps.ps1
 ```
 
-`run.ps1` 与 `run-gui.ps1` 会在 `out\classes` 不存在时自动先编译。
+`run.ps1` 与 `run-gui.ps1` 会在 `out\classes` 不存在时自动先编译；
+`run-gui.ps1` 还会在 `lib\` 为空时自动下载 FlatLaf。
 也可以单独执行 `.\build.ps1`。
 
 ---
@@ -218,10 +234,63 @@ BUFF 购入价 **70.00 元**，Steam 挂单价 **100.00 元**，目标余额 **1
 
 ## 七、图形界面
 
-`.\run-gui.ps1` 启动。三个输入框都装了实时监听，边打字边出结果；
-报告正文与命令行**逐字一致**（同一套 `ConsoleReport` 渲染），
-底部的 `[购买建议]` 章节同样会实时刷新。
-输入不完整时只在结果区显示灰色提示，不会弹窗打断输入。
+`.\run-gui.ps1` 启动。三个输入框都装了实时监听，边打字边出结果。
+
+![宽屏布局](docs/screenshots/gui-wide.png)
+
+### 界面构成
+
+| 区域 | 内容 |
+|---|---|
+| 顶部标题栏 | Steam 深蓝 `#1B2838`，取自 Steam 客户端主背景色 |
+| 输入区 | 两行三列，小标签在上、控件在下；下拉框带 tooltip 说明 |
+| 核心指标卡 | 折合折扣、需购买、总成本、实际到手余额——**大号数字承载结论**，划算为绿、不划算为红 |
+| 明细区 | 单件指标与目标倒推，每行左右两端对齐 |
+| 购买建议 | 两种买法并排对比，推荐方浅绿底 + 绿色描边 + `★ 推荐` 徽标，下方给出量化理由 |
+| 底部状态栏 | 单行摘要；右侧「复制文本报告」「恢复默认」按钮 |
+
+### 与命令行的一致性
+
+界面不再复刻命令行的等宽文本，而是用结构化组件渲染，因此**中英混排天然对齐**，
+不再依赖空格 padding。但两者取数完全同源：
+
+- 折扣格式走 `Formats.discount()`，推荐理由走 `AdviceNarrator.reasons()`，措辞不会分叉
+- 「复制文本报告」按钮（或 `Ctrl+D`）会把**与命令行逐字相同**的报告复制到剪贴板
+
+### 响应式与分辨率适配
+
+窗口宽度跨过 **1150px** 时自动切换布局：
+
+| 窗口宽度 | 指标卡 | 明细 + 建议 |
+|---|---|---|
+| ≥ 1150px | 一行 4 张 | 左右并排 |
+| < 1150px | 两行 2 张 | 上下堆叠 |
+
+![窄屏布局](docs/screenshots/gui-narrow.png)
+
+窗口初始尺寸按屏幕可用区域的比例计算并限制在屏内，最小尺寸也随屏幕收缩；
+内容区可纵向滚动，因此 1366×768 这类小屏不会被撑破：
+
+![笔记本尺寸](docs/screenshots/gui-laptop.png)
+
+已在 2560×1600 @160% DPI 缩放下实测无错位（FlatLaf 原生支持 HiDPI）。
+
+### 外观依赖
+
+启用 FlatLaf 时得到圆角控件、细滚动条与统一焦点环。
+没有 `lib\flatlaf-*.jar` 时自动回退系统外观——**自绘卡片与整套配色仍然生效**，
+只是输入框、下拉框、按钮变回系统原生样式，功能与数字完全不受影响。
+
+### 设计令牌
+
+配色、字体、间距、圆角集中在 `gui/theme/Theme.java` 一处：
+
+- Steam 色系：`#1B2838` 深蓝、`#2A475E` 中蓝、`#66C0F4` 亮蓝、`#1A9FFF` 交互蓝
+- 正向色没有直接用 Steam 促销亮绿 `#A4D007`（白底对比度不足），改用同色系加深的 `#4C8C2B`
+- 字体优先 `Microsoft YaHei UI` → `PingFang SC` → 逻辑字体回退
+- 字号阶梯 30 / 21 / 14 / 13 / 11，间距走 8pt 网格
+
+目前只实现浅色，但所有颜色都集中为常量，将来加深色只需再补一套值。
 
 ---
 
@@ -248,8 +317,10 @@ public static final GameProfile TF2 = of("tf2", "Team Fortress 2 (TF2)", 500, 10
 steam倒余额计算器\
 ├─ build.ps1                  编译到 out\classes
 ├─ run.ps1                    命令行入口
-├─ run-gui.ps1                图形界面入口
+├─ run-gui.ps1                图形界面入口（首次运行自动拉取可选依赖）
 ├─ run-tests.ps1              自测入口
+├─ download-deps.ps1          下载可选 FlatLaf（自动探测代理、幂等、校验 JAR）
+├─ docs\screenshots\          README 使用的界面截图
 └─ src\main\java\com\steamarbitrage\
    ├─ Main.java               入口分流：无参数→交互模式，gui→图形界面，其他→单次计算
    ├─ core\                   领域层，纯计算、无 IO、可单独复用
@@ -264,16 +335,32 @@ steam倒余额计算器\
    │   ├─ PlanKind.java               购买方式类型：少倒+补差价 / 多倒+全额余额
    │   ├─ PurchasePlan.java           一种购买方式的资金明细
    │   ├─ PurchaseAdvice.java         两种方式的对比结论与推荐
-   │   └─ AdviceCalculator.java       购买建议推导（含推荐规则）
+   │   ├─ AdviceCalculator.java       购买建议推导（含推荐规则）
+   │   ├─ AdviceNarrator.java         推荐理由与注意事项文案（CLI 与 GUI 共用）
+   │   └─ Formats.java                折扣、百分比的统一文本格式
    ├─ cli\
    │   ├─ ArgParser.java              命令行参数解析
    │   ├─ InteractiveShell.java       中文问答式交互模式
    │   └─ ConsoleReport.java          报告渲染（按显示宽度对齐中英混排）
    ├─ gui\
-   │   └─ SwingApp.java               图形界面
+   │   ├─ SwingApp.java               窗口组装、响应式布局、事件分发
+   │   ├─ Choice.java                 下拉框条目（显示文本 + 真实枚举值）
+   │   ├─ theme\                      设计令牌与自绘控件
+   │   │   ├─ Theme.java                     配色 / 字体 / 间距 + FlatLaf 反射加载
+   │   │   ├─ CardPanel.java                 圆角卡片容器
+   │   │   ├─ MetricCard.java                核心指标卡
+   │   │   ├─ KeyValueRow.java               两端对齐的键值行
+   │   │   ├─ ScrollablePanel.java           宽度跟随视口的滚动内容面板
+   │   │   └─ UiFactory.java                 组件工厂
+   │   └─ view\
+   │       ├─ InputPanel.java                输入区
+   │       ├─ MetricsPanel.java              核心指标区
+   │       ├─ DetailPanel.java               明细区
+   │       └─ AdvicePanel.java               购买建议区
    └─ test\
        ├─ SelfTest.java               核心自测（194 项断言）
-       └─ GuiSelfCheck.java           图形界面自测（11 项断言）
+       ├─ GuiSelfCheck.java           图形界面自测（33 项断言）
+       └─ GuiSnapshot.java            界面截图工具（开发期自查，不参与断言）
 ```
 
 ---
@@ -295,7 +382,8 @@ steam倒余额计算器\
   （完全等价 / 方式 B 无条件更优 / 方式 B 多花钱但更划算 / 单件不划算改推荐方式 A）
 - 边界与异常：售价低于最低价、零价、负价、非法文本、缺少参数、未知参数
 - 报告渲染：中文显示宽度、折扣与性价比格式
-- 图形界面：下拉框取值映射、GUI 与命令行输出逐字一致、残缺输入不崩溃
+- 图形界面：结构化面板取值、下拉框映射、响应式断点切换列数、残缺输入不崩溃
+- 界面持有的结果与命令行同源输入逐字一致
 
 无图形显示的环境下 GUI 自检会自动跳过，不会让整套测试失败。
 
