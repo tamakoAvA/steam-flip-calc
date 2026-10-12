@@ -23,6 +23,9 @@ import java.awt.Component;
 import java.awt.Container;
 import java.awt.GraphicsEnvironment;
 import java.awt.GridLayout;
+import java.awt.event.ContainerAdapter;
+import java.awt.event.ContainerEvent;
+import java.awt.event.ContainerListener;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -233,6 +236,39 @@ public final class GuiSelfCheck {
             input.resetToDefaults();
             compute(app);
             checkTrue("超大金额之后能恢复正常计算", lastResult(app) != null);
+
+            // ── 回归：输入变化不能重建组件树 ──
+            // rebuildSections() 里的 removeAll() 会把输入框从容器树里摘掉、焦点随之丢失，
+            // 表现出来就是「每输入一个字符都得重新点一次输入框」。这里直接数移除事件：
+            // 日常输入只该触发重新布局，不该有任何组件被摘下来。
+            int[] removedCount = {0};
+            ContainerListener removalWatcher = new ContainerAdapter() {
+                @Override
+                public void componentRemoved(ContainerEvent e) {
+                    removedCount[0]++;
+                }
+            };
+            content.addContainerListener(removalWatcher);
+
+            input.resetToDefaults();
+            compute(app);
+            input.purchaseField().setText("75");
+            compute(app);
+            input.purchaseField().setText("80");
+            compute(app);
+
+            check("连续输入不会移除任何卡片（否则输入框会失焦）", 0, removedCount[0]);
+
+            // 自检：确认上面那条断言真的抓得住问题 —— 手动触发一次重建，
+            // 它必须产生移除事件。否则这条断言就是永远通过的假阳性。
+            invoke(app, "rebuildSections");
+            checkTrue("（断言自检）rebuildSections 确实会移除组件", removedCount[0] > 0);
+
+            content.removeContainerListener(removalWatcher);
+
+            // 还原输入，避免影响后面的断言
+            input.resetToDefaults();
+            compute(app);
 
             // ── 用例 I：界面持有的结果与命令行同源输入一致 ──
             CalcResult expected = BalanceCalculator.calculate(new CalcRequest(

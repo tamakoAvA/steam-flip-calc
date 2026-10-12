@@ -34,11 +34,13 @@ import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import javax.swing.border.EmptyBorder;
 import java.awt.BorderLayout;
+import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.GraphicsEnvironment;
 import java.awt.GridLayout;
 import java.awt.Insets;
+import java.awt.KeyboardFocusManager;
 import java.awt.Rectangle;
 import java.awt.Toolkit;
 import java.awt.datatransfer.StringSelection;
@@ -301,8 +303,16 @@ public final class SwingApp {
     /**
      * 按「显示状态 + 置顶状态」重新分配卡片：
      * 置顶的进固定区，其余的按默认顺序排在滚动区。
+     *
+     * <p><b>只应在结构真的变化时调用。</b>它会把组件从容器树里摘下来再挂回去，
+     * 过程中的焦点丢失靠下面的保存 / 恢复兜底；而「内容变了」这种日常刷新
+     * 请改用 {@link #relayoutSections()}，否则输入框会在每次按键后失焦。
      */
     private void rebuildSections() {
+        // 摘挂组件会让焦点回到顶层容器，先记下当前焦点所有者，重建完再还回去
+        Component focusOwner =
+                KeyboardFocusManager.getCurrentKeyboardFocusManager().getFocusOwner();
+
         pinnedPanel.removeAll();
         contentPanel.removeAll();
 
@@ -333,6 +343,26 @@ public final class SwingApp {
 
         // revalidate() 只是把布局排进事件队列，在「显示置顶区」这种
         // 从不可见变可见的场景下不足以及时生效，因此这里同步跑一次 validate()。
+        if (frame != null) {
+            frame.validate();
+        }
+
+        if (focusOwner != null && focusOwner.isShowing()) {
+            focusOwner.requestFocusInWindow();
+        }
+    }
+
+    /**
+     * 内容变化后刷新布局，<b>不碰组件树</b>。
+     *
+     * <p>数字变了、卡片变高变矮，只需要重新布局；若这里也走 {@link #rebuildSections()}，
+     * 输入框会被 {@code removeAll()} 从容器里摘掉，焦点随之丢失 ——
+     * 表现出来就是「每输入一个字符都得重新点一次输入框」。
+     */
+    private void relayoutSections() {
+        updatePinnedHeight();
+        pinnedPanel.revalidate();
+        contentPanel.revalidate();
         if (frame != null) {
             frame.validate();
         }
@@ -396,8 +426,9 @@ public final class SwingApp {
             singleItemPanel.update(result);
             targetPanel.update(result);
 
-            // 卡片内容变化会改变首选高度，需要重新排布
-            rebuildSections();
+            // 卡片内容变化会改变首选高度，只需重新布局。
+            // 这里绝不能走 rebuildSections()：它会把输入框摘出容器树，焦点随之丢失。
+            relayoutSections();
 
             boolean hasCaution = !AdviceNarrator.cautions(result).isEmpty();
             statusLabel.setForeground(hasCaution ? Theme.WARNING : Theme.POSITIVE);
@@ -410,7 +441,7 @@ public final class SwingApp {
             advicePanel.clear();
             singleItemPanel.clear();
             targetPanel.clear();
-            rebuildSections();
+            relayoutSections();
 
             String message = e.getMessage() == null ? e.toString() : e.getMessage();
             statusLabel.setForeground(Theme.TEXT_MUTED);
