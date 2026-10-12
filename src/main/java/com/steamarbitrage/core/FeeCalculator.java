@@ -38,7 +38,7 @@ public final class FeeCalculator {
             return 0L;
         }
         if (mode == FeeMode.SIMPLE) {
-            return buyerPaysCents * BP_SCALE / (BP_SCALE + profile.totalFeeBp());
+            return estimateSellerCents(buyerPaysCents, BP_SCALE + profile.totalFeeBp());
         }
         return exactSellerReceivesCents(buyerPaysCents);
     }
@@ -55,14 +55,44 @@ public final class FeeCalculator {
         }
         // 先用线性估算定位，再向下压到合法值、向上推到最大合法值。
         // estimate 可能略高也可能略低（低金额时最低手续费保底会把买家支付抬上去），所以两侧都要调。
-        long sellerCents = buyerPaysCents * BP_SCALE / (BP_SCALE + profile.totalFeeBp());
+        long sellerCents = estimateSellerCents(buyerPaysCents, BP_SCALE + profile.totalFeeBp());
+
+        int steps = 0;
         while (sellerCents > 0 && profile.buyerPaysCents(sellerCents) > buyerPaysCents) {
             sellerCents--;
+            steps = countStep(steps);
         }
         while (profile.buyerPaysCents(sellerCents + 1) <= buyerPaysCents) {
             sellerCents++;
+            steps = countStep(steps);
         }
         return sellerCents;
+    }
+
+    /**
+     * 线性估算：{@code 买家支付 × 10000 ÷ (10000 + 总费率)}。
+     *
+     * <p>不能直接写成 {@code buyerPaysCents * BP_SCALE / divisor} —— 被除数会先溢出。
+     * 之前正是这个溢出让估算值严重偏离真解，随后的微调循环要跨越 10¹⁵ 量级的差距，
+     * 而每次只走 1 分，于是命令行静默挂死、图形界面彻底卡死。
+     * 这里先取整、再用余数补足，全程不越界，结果与直接相除完全一致。
+     */
+    private static long estimateSellerCents(long buyerPaysCents, long divisor) {
+        return (buyerPaysCents / divisor) * BP_SCALE
+                + (buyerPaysCents % divisor) * BP_SCALE / divisor;
+    }
+
+    /**
+     * 累计微调步数并设上限。
+     *
+     * <p>正常量级下估算值与真解只差几分，几步就收敛。留这个上限是最后一道保险：
+     * 万一将来费率模型改得让估算失准，也宁可抛异常，而不是把界面卡到无法操作。
+     */
+    private static int countStep(int steps) {
+        if (steps + 1 > MAX_ADJUST_STEPS) {
+            throw new ArithmeticException("金额过大，无法完成精确反解");
+        }
+        return steps + 1;
     }
 
     /** 由卖家到手价（分）正推买家支付价（分）。 */
@@ -106,4 +136,12 @@ public final class FeeCalculator {
 
     /** 万分比基准，供 {@link #sellerReceivesCents(long)} 使用。 */
     private static final long BP_SCALE = GameProfile.BP_SCALE;
+
+    /**
+     * 微调循环的最大步数。
+     *
+     * <p>估算值与真解理论上只差几分，64 步已远超所需；一旦超出，说明输入金额
+     * 已大到中间量不可信，此时宁可报错也不能继续循环下去。
+     */
+    private static final int MAX_ADJUST_STEPS = 64;
 }

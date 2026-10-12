@@ -220,6 +220,20 @@ public final class GuiSelfCheck {
             compute(app);
             checkTrue("恢复默认后重新出结果", lastResult(app) != null);
 
+            // ── 回归：超大金额不能让界面卡死 ──
+            // 旧实现里精确反解的微调循环会在这里永不终止，EDT 被占死、整窗冻结。
+            // 若这条挂了，表现通常是整个套件卡住不返回，而不是断言失败。
+            input.sellField().setText("61500000000000");
+            long startedAt = System.currentTimeMillis();
+            compute(app);
+            long elapsedMs = System.currentTimeMillis() - startedAt;
+            checkTrue("超大金额输入不会卡死界面（耗时 " + elapsedMs + "ms）", elapsedMs < 3000);
+            checkTrue("超大金额被拒绝，无计算结果", lastResult(app) == null);
+
+            input.resetToDefaults();
+            compute(app);
+            checkTrue("超大金额之后能恢复正常计算", lastResult(app) != null);
+
             // ── 用例 I：界面持有的结果与命令行同源输入一致 ──
             CalcResult expected = BalanceCalculator.calculate(new CalcRequest(
                     Money.parse("70"), Money.parse("100"), PriceType.BUYER_PAID,

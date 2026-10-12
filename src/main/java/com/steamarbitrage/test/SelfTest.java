@@ -46,6 +46,7 @@ public final class SelfTest {
         testPurchaseAdvice();
         testEdgeCases();
         testCeilDiv();
+        testOverflowGuards();
         testArgParser();
         testReportRendering();
 
@@ -388,6 +389,46 @@ public final class SelfTest {
                 () -> BalanceCalculator.ceilDiv(10, 0));
     }
 
+    /**
+     * 溢出防线回归测试。
+     *
+     * <p>这三条都对应真实发生过的缺陷：金额极大时中间量在 {@code long} 上回绕，
+     * 而下游逻辑又依赖「回绕后」的值做循环条件，结果是死循环或算错。
+     */
+    private static void testOverflowGuards() {
+        // ① 精确反解的估算式曾在超大金额下溢出：
+        //    buyerPaysCents * 10000 越界后估算值严重偏离真解，微调循环要跨越 10^15 量级，
+        //    每次却只走 1 分 → 命令行静默挂死、界面永久卡死。
+        FeeCalculator exact = new FeeCalculator(GameProfile.CS2, FeeMode.EXACT);
+        long huge = 6_150_000_000_000_000L;
+        long recovered = exact.sellerReceivesCents(huge);
+        checkTrue("超大金额的精确反解能返回（不再死循环）", recovered > 0);
+        checkTrue("超大金额的反解不超过买家支付", recovered <= huge);
+        checkTrue("超大金额的反解满足正向关系",
+                GameProfile.CS2.buyerPaysCents(recovered) <= huge);
+
+        // ② 估算式改写后必须与「直接相乘再相除」等价，含除不尽的情况
+        FeeCalculator simple = new FeeCalculator(GameProfile.CS2, FeeMode.SIMPLE);
+        check("近似模式结果不变（10000 分）", 8695L, simple.sellerReceivesCents(10000));
+        check("近似模式结果不变（整除）", 86956521739L,
+                simple.sellerReceivesCents(100_000_000_000L));
+        check("近似模式结果不变（除不尽）", 8695652173L,
+                simple.sellerReceivesCents(10_000_000_000L));
+
+        // ③ 费率乘法溢出必须抛异常，而不是静默回绕成负数
+        checkThrows("费率乘法溢出抛异常", ArithmeticException.class,
+                () -> GameProfile.CS2.steamFeeCents(Long.MAX_VALUE / 500 + 1));
+        check("正常量级的手续费不受影响", 434L, GameProfile.CS2.steamFeeCents(8697));
+
+        // ④ ceilDiv 曾在被除数接近 Long.MAX_VALUE 时回绕成负数，
+        //    再被误报成「参数错误」
+        check("ceilDiv 上限值除以 1", Long.MAX_VALUE, BalanceCalculator.ceilDiv(Long.MAX_VALUE, 1));
+        check("ceilDiv 上限值除以 2", 4611686018427387904L,
+                BalanceCalculator.ceilDiv(Long.MAX_VALUE, 2));
+        check("ceilDiv 上限值减一除以 2", 4611686018427387903L,
+                BalanceCalculator.ceilDiv(Long.MAX_VALUE - 1, 2));
+    }
+
     private static void testArgParser() {
         ArgParser.Options longForm = ArgParser.parse(
                 new String[]{"--buy", "70", "--sell", "100", "--target", "1000"});
@@ -424,6 +465,11 @@ public final class SelfTest {
                 () -> ArgParser.parse(new String[]{"--nope"}));
         checkThrows("缺少取值", IllegalArgumentException.class,
                 () -> ArgParser.parse(new String[]{"--buy"}));
+        checkThrows("取值后紧跟另一个选项", IllegalArgumentException.class,
+                () -> ArgParser.parse(new String[]{
+                        "--price-type", "--game", "tf2", "70", "86.97", "1000"}));
+        checkThrows("等号后为空值", IllegalArgumentException.class,
+                () -> ArgParser.parse(new String[]{"--price-type=", "70", "100", "1000"}));
         checkThrows("多余位置参数", IllegalArgumentException.class,
                 () -> ArgParser.parse(new String[]{"70", "100", "1000", "extra"}));
         checkThrows("缺少必填参数", IllegalArgumentException.class,

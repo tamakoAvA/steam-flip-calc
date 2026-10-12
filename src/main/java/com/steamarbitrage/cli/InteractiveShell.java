@@ -214,6 +214,10 @@ public final class InteractiveShell {
                 return money;
             } catch (IllegalArgumentException e) {
                 out.println(e.getMessage() + "，请重新输入。");
+            } catch (ArithmeticException e) {
+                // 位数过多时 Money.parse 抛的是 ArithmeticException；
+                // 不接住会直接冒到 Main 并终止整个交互会话
+                out.println("金额超出可计算范围，请重新输入。");
             }
         }
     }

@@ -70,7 +70,10 @@ public final class BalanceCalculator {
         if (dividend <= 0) {
             return 0L;
         }
-        return (dividend + divisor - 1) / divisor;
+        // 不用常见的 (a + b - 1) / b：dividend 接近 Long.MAX_VALUE 时
+        // 加法会先回绕成负数，算出负件数，再被误报成「参数错误」。
+        long quotient = dividend / divisor;
+        return dividend % divisor == 0L ? quotient : quotient + 1;
     }
 
     /**

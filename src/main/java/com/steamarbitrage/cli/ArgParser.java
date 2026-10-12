@@ -83,11 +83,23 @@ public final class ArgParser {
                 value = token.substring(eq + 1);
             }
 
-            if (value == null && VALUE_OPTIONS.contains(key)) {
-                if (i + 1 >= args.length) {
+            if (VALUE_OPTIONS.contains(key)) {
+                if (value == null) {
+                    if (i + 1 >= args.length) {
+                        throw new IllegalArgumentException("参数 " + key + " 缺少取值");
+                    }
+                    String next = args[i + 1];
+                    // 下一个 token 本身就是个选项时，说明用户漏写了取值。
+                    // 若直接吞掉它，后面的参数会整体错位，报出毫不相干的错误。
+                    if (next.startsWith("--")) {
+                        throw new IllegalArgumentException(
+                                "参数 " + key + " 缺少取值（后面紧跟的是 " + next + "）");
+                    }
+                    value = args[++i];
+                }
+                if (value.isEmpty()) {
                     throw new IllegalArgumentException("参数 " + key + " 缺少取值");
                 }
-                value = args[++i];
             }
 
             switch (key) {

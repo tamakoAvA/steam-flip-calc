@@ -103,6 +103,9 @@ public final class SwingApp {
     private final JButton copyButton = UiFactory.secondaryButton("复制文本报告");
     private final JButton drawerButton = UiFactory.secondaryButton("显示区域");
 
+    /** 复制成功提示的恢复计时器；复用同一个实例，避免连点时堆积计时器。 */
+    private final Timer restoreTimer = new Timer(1800, e -> compute());
+
     private JFrame frame;
     private ScrollablePanel contentPanel;
     private ScrollablePanel pinnedPanel;
@@ -110,6 +113,7 @@ public final class SwingApp {
     private CalcResult lastResult;
 
     private SwingApp() {
+        restoreTimer.setRepeats(false);
     }
 
     /** 启动图形界面（非阻塞）。 */
@@ -425,13 +429,20 @@ public final class SwingApp {
         if (!warnings.isEmpty()) {
             text.append('\n').append(warnings);
         }
-        Toolkit.getDefaultToolkit().getSystemClipboard()
-                .setContents(new StringSelection(text.toString()), null);
+
+        try {
+            Toolkit.getDefaultToolkit().getSystemClipboard()
+                    .setContents(new StringSelection(text.toString()), null);
+        } catch (RuntimeException e) {
+            // 剪贴板可能被其它程序占用（剪贴板管理器、远程桌面等），
+            // 这时必须如实告知，否则用户会以为已经复制成功
+            statusLabel.setForeground(Theme.DANGER);
+            statusLabel.setText("● 复制失败：剪贴板被其它程序占用，请稍后重试");
+            return;
+        }
 
         statusLabel.setForeground(Theme.POSITIVE);
         statusLabel.setText("● 已复制完整文本报告到剪贴板");
-        Timer restore = new Timer(1800, e -> compute());
-        restore.setRepeats(false);
-        restore.start();
+        restoreTimer.restart();
     }
 }

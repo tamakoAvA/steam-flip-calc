@@ -148,7 +148,7 @@ public final class GameProfile {
         if (sellerCents <= 0) {
             return 0L;
         }
-        return Math.max(sellerCents * steamFeeBp / BP_SCALE, minSteamFeeCents);
+        return Math.max(feeCents(sellerCents, steamFeeBp), minSteamFeeCents);
     }
 
     /** 给定卖家收入（分），返回游戏手续费（分）。 */
@@ -156,7 +156,24 @@ public final class GameProfile {
         if (sellerCents <= 0) {
             return 0L;
         }
-        return Math.max(sellerCents * gameFeeBp / BP_SCALE, minGameFeeCents);
+        return Math.max(feeCents(sellerCents, gameFeeBp), minGameFeeCents);
+    }
+
+    /**
+     * 费率乘法：{@code 卖家收入 × 万分比 ÷ 10000}。
+     *
+     * <p>刻意用 {@link Math#multiplyExact} 而不是裸的 {@code *}。
+     * 金额极大时裸乘法会悄悄回绕成负数，而 {@link FeeCalculator} 的「逐分微调」循环
+     * 依赖手续费随收入单调递增 —— 手续费一旦变负，循环条件
+     * {@code buyerPaysCents(sellerCents + 1) <= buyerPaysCents} 恒真，
+     * 卖家收入每次只加 1 却永远追不上，于是进入事实上的死循环
+     * （命令行静默挂死、图形界面整个卡死）。
+     *
+     * <p>这里让它直接抛 {@link ArithmeticException}，上层会当作
+     * 「金额超出可计算范围」处理，而不是把程序挂住。
+     */
+    private static long feeCents(long sellerCents, int basisPoints) {
+        return Math.multiplyExact(sellerCents, (long) basisPoints) / BP_SCALE;
     }
 
     /** 给定卖家收入（分），返回买家需要支付的总额（分）。 */
