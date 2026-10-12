@@ -78,6 +78,7 @@ public final class GuiSelfCheck {
             invoke(app, "buildRoot");
 
             InputPanel input = (InputPanel) field(app, "inputPanel");
+            SectionCard inputCard = (SectionCard) field(app, "inputCard");
             SectionCard advice = (SectionCard) field(app, "advicePanel");
             SectionCard singleItem = (SectionCard) field(app, "singleItemPanel");
             SectionCard target = (SectionCard) field(app, "targetPanel");
@@ -117,15 +118,30 @@ public final class GuiSelfCheck {
             checkTrue("目标倒推显示需购买数量", targetText.contains("12 件"));
             checkTrue("目标倒推显示超出目标", targetText.contains("¥43.64"));
 
-            // ── 用例 C：默认上下顺序「购买建议 → 单件指标 → 目标倒推」──
+            // ── 用例 C：默认上下顺序「输入参数 → 指标卡 → 购买建议 → 单件指标 → 目标倒推」──
+            JPanel metricsCard = (JPanel) field(app, "metricsPanel");
+            int inputIndex = indexOf(content, inputCard);
+            int metricsIndex = indexOf(content, metricsCard);
             int adviceIndex = indexOf(content, advice);
             int singleIndex = indexOf(content, singleItem);
             int targetIndex = indexOf(content, target);
+
+            checkTrue("输入卡排在滚动区最前", inputIndex == 0);
+            checkTrue("核心指标卡紧跟输入卡", metricsIndex == inputIndex + 1);
             checkTrue("购买建议排在单件指标之前",
                     adviceIndex >= 0 && singleIndex >= 0 && adviceIndex < singleIndex);
             checkTrue("单件指标排在目标倒推之前", singleIndex < targetIndex);
             checkTrue("默认没有卡片被置顶", pinned.getComponentCount() == 0);
             checkTrue("默认置顶区隐藏", !pinnedScroll.isVisible());
+
+            // 输入卡也能置顶，此时指标卡留在滚动区顶部
+            inputCard.header().togglePinForTest();
+            checkTrue("输入卡可置顶", indexOf(pinned, inputCard) >= 0);
+            checkTrue("输入卡置顶后指标卡留在滚动区首位", indexOf(content, metricsCard) == 0);
+            inputCard.header().togglePinForTest();
+            checkTrue("取消置顶后输入卡回到滚动区", indexOf(content, inputCard) >= 0);
+            checkTrue("恢复后指标卡重新紧跟输入卡",
+                    indexOf(content, metricsCard) == indexOf(content, inputCard) + 1);
 
             // ── 用例 D：图钉把卡片搬到固定区 ──
             advice.header().togglePinForTest();

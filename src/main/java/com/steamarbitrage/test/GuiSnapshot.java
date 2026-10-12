@@ -125,6 +125,9 @@ public final class GuiSnapshot {
         } else if ("pinned".equals(state)) {
             SectionCard advice = (SectionCard) field(app, "advicePanel");
             SwingUtilities.invokeAndWait(advice.header()::togglePinForTest);
+        } else if ("pinned-input".equals(state)) {
+            SectionCard input = (SectionCard) field(app, "inputCard");
+            SwingUtilities.invokeAndWait(input.header()::togglePinForTest);
         }
     }
 

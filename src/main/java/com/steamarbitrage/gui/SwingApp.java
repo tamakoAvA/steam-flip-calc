@@ -10,6 +10,7 @@ import com.steamarbitrage.gui.theme.Theme;
 import com.steamarbitrage.gui.theme.UiFactory;
 import com.steamarbitrage.gui.theme.VerticalLayout;
 import com.steamarbitrage.gui.view.AdvicePanel;
+import com.steamarbitrage.gui.view.InputCard;
 import com.steamarbitrage.gui.view.InputPanel;
 import com.steamarbitrage.gui.view.MetricsPanel;
 import com.steamarbitrage.gui.view.SectionCard;
@@ -88,9 +89,14 @@ public final class SwingApp {
     private final TargetPanel targetPanel = new TargetPanel();
     private final SideDrawer sideDrawer = new SideDrawer();
 
-    /** 默认上下顺序：购买建议 → 单件指标 → 按目标余额倒推。 */
-    private final List<SectionCard> sections = List.of(advicePanel, singleItemPanel, targetPanel);
-    private final Set<SectionCard> pinnedSections = new HashSet<>();
+    /** 带置顶按钮的输入卡片。 */
+    private final InputCard inputCard = new InputCard(inputPanel);
+
+    /** 全部可置顶的卡片，顺序即默认排列顺序：输入参数 → 购买建议 → 单件指标 → 按目标余额倒推。 */
+    private final List<SectionCard> cards =
+            List.of(inputCard, advicePanel, singleItemPanel, targetPanel);
+
+    private final Set<SectionCard> pinnedCards = new HashSet<>();
 
     private final JLabel statusLabel =
             UiFactory.label(" ", Theme.regular(Theme.SIZE_SMALL), Theme.TEXT_SECONDARY);
@@ -98,7 +104,6 @@ public final class SwingApp {
     private final JButton drawerButton = UiFactory.secondaryButton("显示区域");
 
     private JFrame frame;
-    private CardPanel inputCard;
     private ScrollablePanel contentPanel;
     private ScrollablePanel pinnedPanel;
     private JScrollPane pinnedScroll;
@@ -151,9 +156,6 @@ public final class SwingApp {
     // ── 界面组装 ────────────────────────────────────────────────────────────
 
     private JComponent buildRoot() {
-        inputCard = UiFactory.card(null);
-        inputCard.add(inputPanel, BorderLayout.CENTER);
-
         JPanel body = new JPanel(new BorderLayout());
         body.setBackground(Theme.PAGE_BG);
         body.add(sideDrawer, BorderLayout.WEST);
@@ -170,21 +172,11 @@ public final class SwingApp {
         return root;
     }
 
-    /** 顶部深蓝标题栏，右侧放侧边抽屉开关。 */
+    /** 顶部深蓝标题栏：侧边抽屉开关放在最左侧，标题紧随其后。 */
     private JComponent buildHeader() {
         JPanel header = new JPanel(new BorderLayout(Theme.GAP_LG, 0));
         header.setBackground(Theme.BRAND_DARK);
         header.setBorder(new EmptyBorder(Theme.GAP_MD, Theme.GAP_LG, Theme.GAP_MD, Theme.GAP_LG));
-
-        JPanel texts = UiFactory.transparentPanel(new BorderLayout(0, 2));
-        texts.add(UiFactory.label("Steam 倒余额计算器", Theme.bold(19), Theme.TEXT_ON_DARK),
-                BorderLayout.NORTH);
-        texts.add(UiFactory.label("输入饰品购入价与 Steam 市场售价，算出折合折扣与所需件数",
-                Theme.regular(Theme.SIZE_SMALL), Theme.TEXT_ON_DARK_MUTED), BorderLayout.SOUTH);
-        header.add(texts, BorderLayout.WEST);
-
-        JPanel right = UiFactory.transparentPanel(new FlowLayout(FlowLayout.RIGHT, Theme.GAP_MD, 0));
-        right.add(UiFactory.label("CS2 · TF2", Theme.bold(Theme.SIZE_SMALL), Theme.ACCENT));
 
         drawerButton.putClientProperty("JButton.buttonType", "borderless");
         drawerButton.setForeground(Theme.TEXT_ON_DARK);
@@ -193,9 +185,20 @@ public final class SwingApp {
             sideDrawer.toggle();
             updateDrawerButton();
         });
-        right.add(drawerButton);
 
-        header.add(right, BorderLayout.EAST);
+        JPanel texts = UiFactory.transparentPanel(new BorderLayout(0, 2));
+        texts.add(UiFactory.label("Steam 倒余额计算器", Theme.bold(19), Theme.TEXT_ON_DARK),
+                BorderLayout.NORTH);
+        texts.add(UiFactory.label("输入饰品购入价与 Steam 市场售价，算出折合折扣与所需件数",
+                Theme.regular(Theme.SIZE_SMALL), Theme.TEXT_ON_DARK_MUTED), BorderLayout.SOUTH);
+
+        JPanel left = UiFactory.transparentPanel(new FlowLayout(FlowLayout.LEFT, Theme.GAP_LG, 0));
+        left.add(drawerButton);
+        left.add(texts);
+        header.add(left, BorderLayout.WEST);
+
+        header.add(UiFactory.label("CS2 · TF2", Theme.bold(Theme.SIZE_SMALL), Theme.ACCENT),
+                BorderLayout.EAST);
         return header;
     }
 
@@ -258,14 +261,14 @@ public final class SwingApp {
         return bar;
     }
 
-    /** 把三块内容的置顶按钮与侧边开关接到重排逻辑上。 */
+    /** 把卡片的置顶按钮与侧边开关接到重排逻辑上。 */
     private void bindSections() {
-        for (SectionCard card : sections) {
+        for (SectionCard card : cards) {
             card.onPin(pinned -> {
                 if (pinned) {
-                    pinnedSections.add(card);
+                    pinnedCards.add(card);
                 } else {
-                    pinnedSections.remove(card);
+                    pinnedCards.remove(card);
                 }
                 rebuildSections();
             });
@@ -274,7 +277,7 @@ public final class SwingApp {
         sideDrawer.onSectionChanged((section, visible) -> {
             SectionCard card = cardFor(section);
             card.setVisible(visible);
-            if (!visible && pinnedSections.remove(card)) {
+            if (!visible && pinnedCards.remove(card)) {
                 // 隐藏时同时取消置顶，否则它会继续占着顶部空间
                 card.setPinned(false);
             }
@@ -291,26 +294,31 @@ public final class SwingApp {
     }
 
     /**
-     * 按「显示状态 + 置顶状态」重新分配三块内容：
+     * 按「显示状态 + 置顶状态」重新分配卡片：
      * 置顶的进固定区，其余的按默认顺序排在滚动区。
      */
     private void rebuildSections() {
         pinnedPanel.removeAll();
         contentPanel.removeAll();
 
-        contentPanel.add(inputCard);
-        contentPanel.add(metricsPanel);
+        // 核心指标卡紧跟输入卡；输入卡被钉住时，指标卡留在滚动区顶部
+        int metricsIndex = -1;
 
-        for (SectionCard card : sections) {
+        for (SectionCard card : cards) {
             if (!card.isVisible()) {
                 continue;
             }
-            if (pinnedSections.contains(card)) {
+            if (pinnedCards.contains(card)) {
                 pinnedPanel.add(card);
             } else {
                 contentPanel.add(card);
+                if (card == inputCard) {
+                    metricsIndex = contentPanel.getComponentCount();
+                }
             }
         }
+
+        contentPanel.add(metricsPanel, metricsIndex < 0 ? 0 : metricsIndex);
 
         updatePinnedHeight();
         pinnedPanel.revalidate();
