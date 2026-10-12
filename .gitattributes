@@ -1,0 +1,8 @@
+# 统一换行符：仓库内存 LF，检出时由 core.autocrlf 决定
+* text=auto
+
+*.java  text
+*.md    text
+*.ps1   text
+*.gitignore text
+*.gitattributes text

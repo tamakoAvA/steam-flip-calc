@@ -1,0 +1,14 @@
+# 编译产物
+out/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+
+# 系统
+Thumbs.db
+Desktop.ini
