@@ -192,9 +192,10 @@ public final class SwingApp {
         texts.add(UiFactory.label("输入饰品购入价与 Steam 市场售价，算出折合折扣与所需件数",
                 Theme.regular(Theme.SIZE_SMALL), Theme.TEXT_ON_DARK_MUTED), BorderLayout.SOUTH);
 
+        // 抽屉开关紧跟在标题两行文字的右侧
         JPanel left = UiFactory.transparentPanel(new FlowLayout(FlowLayout.LEFT, Theme.GAP_LG, 0));
-        left.add(drawerButton);
         left.add(texts);
+        left.add(drawerButton);
         header.add(left, BorderLayout.WEST);
 
         header.add(UiFactory.label("CS2 · TF2", Theme.bold(Theme.SIZE_SMALL), Theme.ACCENT),
