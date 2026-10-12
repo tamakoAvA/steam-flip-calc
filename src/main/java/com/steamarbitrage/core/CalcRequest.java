@@ -39,12 +39,25 @@ public record CalcRequest(
         return priceType == PriceType.BUYER_PAID ? "Steam 挂单价" : "Steam 到手价";
     }
 
+    /**
+     * 金额上限：10 亿元（1e11 分）。
+     *
+     * <p>费率换算里会用「分值 × 万分比」做整数乘法，正常量级远远安全；
+     * 但若不设上限，用户输入天文数字会让 {@code long} 悄悄回绕成负数，
+     * 结果是算出一堆看似正常实则错误的数据。这里直接用人类不可能触及、
+     * 但仍在安全范围内的额度把口子封住。
+     */
+    private static final long MAX_CENTS = 100_000_000_000L;
+
     private static void requirePositive(Money value, String name) {
         if (value == null) {
             throw new IllegalArgumentException(name + "不能为空");
         }
         if (!value.isPositive()) {
             throw new IllegalArgumentException(name + "必须大于 0（当前为 " + value + "）");
+        }
+        if (value.cents() > MAX_CENTS) {
+            throw new IllegalArgumentException(name + "超出可计算上限（10 亿元）");
         }
     }
 }

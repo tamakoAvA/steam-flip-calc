@@ -331,7 +331,11 @@ steam倒余额计算器\
 ├─ run.ps1                    命令行入口
 ├─ run-gui.ps1                图形界面入口（首次运行自动拉取可选依赖）
 ├─ run-tests.ps1              自测入口
+├─ pack.ps1                   打包成 Windows 可执行文件（jpackage）
 ├─ download-deps.ps1          下载可选 FlatLaf（自动探测代理、幂等、校验 JAR）
+├─ assets\
+│   ├─ icon-source.jpg        图标源图
+│   └─ app.ico                多尺寸图标（由 IconBuilder 生成）
 ├─ docs\screenshots\          README 使用的界面截图
 └─ src\main\java\com\steamarbitrage\
    ├─ Main.java               入口分流：无参数→交互模式，gui→图形界面，其他→单次计算
@@ -380,7 +384,8 @@ steam倒余额计算器\
    └─ test\
        ├─ SelfTest.java               核心自测（194 项断言）
        ├─ GuiSelfCheck.java           图形界面自测（56 项断言）
-       └─ GuiSnapshot.java            界面截图工具（开发期自查，不参与断言）
+       ├─ GuiSnapshot.java            界面截图工具（开发期自查，不参与断言）
+       └─ IconBuilder.java            图标生成（JPG → 多尺寸 ICO）
 ```
 
 ---
@@ -426,3 +431,36 @@ steam倒余额计算器\
 
 **能不能算多个饰品一起凑单？**
 当前版本聚焦单品类计算。`core` 层已是纯函数、与 UI 解耦，后续加批量对比或组合优化不需要改动现有算法。
+
+---
+
+## 十二、打包成可执行文件
+
+```powershell
+.\pack.ps1                  # 绿色版目录 + 安装程序
+.\pack.ps1 -AppImageOnly    # 只做绿色版（不需要 WiX）
+.\pack.ps1 -Version 1.1.0   # 指定版本号
+```
+
+产物在 `out\dist\`：
+
+| 产物 | 大小 | 说明 |
+|---|---|---|
+| `steam-flip-calc\` | 约 77 MB | 绿色版目录，含裁剪过的运行时；整个目录拷给别人即可，双击里面的 `steam-flip-calc.exe` |
+| `steam-flip-calc-1.0.0.exe` | 约 29 MB | 安装程序，双击安装，可选安装目录并创建开始菜单 / 桌面快捷方式，按用户安装（不需要管理员） |
+
+几个实现要点：
+
+- **图标**：`assets\app.ico` 由 `assets\icon-source.jpg` 经 `IconBuilder` 生成。
+  JDK 的 ImageIO 只读不写 ICO，所以容器格式是手写的；条目用 32bpp **DIB** 而不是把 PNG 塞进去，
+  因为 jpackage 内部的 ICO 解析器只认 DIB。重新生成图标：
+  ```powershell
+  java -cp out\classes com.steamarbitrage.test.IconBuilder assets\icon-source.jpg assets\app.ico
+  ```
+- **运行时裁剪**：`--add-modules java.desktop,java.logging,jdk.unsupported`，
+  默认全模块要 123 MB，裁剪后 77 MB（实际只保留 7 个模块）
+- **安装程序**需要 WiX 3（`candle.exe` / `light.exe`）。脚本会在 `out\tools\wix\` 找，
+  找不到就跳过安装包并给出提示，绿色版照常产出
+- **打包后的启动器没有控制台**，所以无参数启动会直接开图形界面；
+  命令行用法请继续用 `.\run.ps1`（源码方式）
+- FlatLaf 通过主 JAR 的 `Class-Path` 清单项被加载，缺失时照常回退系统外观

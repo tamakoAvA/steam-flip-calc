@@ -361,6 +361,14 @@ public final class SelfTest {
                 () -> new CalcRequest(null, Money.parse("100"),
                         PriceType.BUYER_PAID, GameProfile.CS2, FeeMode.EXACT, Money.parse("1000")));
 
+        // 金额上限：避免「分值 × 万分比」在 long 上回绕出负数
+        checkThrows("金额超过上限（20 亿元）", IllegalArgumentException.class,
+                () -> new CalcRequest(Money.parse("2000000000"), Money.parse("100"),
+                        PriceType.BUYER_PAID, GameProfile.CS2, FeeMode.EXACT, Money.parse("1000")));
+        CalcResult nearLimit = calculate("999999999", "100", "1000",
+                PriceType.BUYER_PAID, GameProfile.CS2, FeeMode.EXACT);
+        check("上限内的极大额仍可计算", 12L, nearLimit.itemCount());
+
         // 单件计算（GUI 在用户还没填目标余额时预览用）
         CalcResult unit = BalanceCalculator.calculateUnit(new CalcRequest(
                 Money.parse("70"), Money.parse("100"), PriceType.BUYER_PAID,
